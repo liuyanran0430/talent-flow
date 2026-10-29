@@ -1212,6 +1212,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /logs/frontend:
+    post:
+      tags:
+      - logs
+      summary: 接收前端日志（warn/error），写入服务端日志文件便于排障
+      operationId: receive_frontend_log_logs_frontend_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FrontendLog'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_NoneType_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     ApiResponse_CandidateOut_:
@@ -1816,6 +1841,46 @@ components:
           title: Responsibility
       type: object
       title: DepartmentUpdate
+    FrontendLog:
+      properties:
+        level:
+          type: string
+          enum:
+          - warn
+          - error
+          title: Level
+          description: 日志级别
+          default: error
+        tag:
+          type: string
+          maxLength: 64
+          title: Tag
+          description: 模块标签，如页面或组件名
+          default: app
+        message:
+          type: string
+          maxLength: 4000
+          title: Message
+          description: 日志内容
+        stack:
+          anyOf:
+          - type: string
+            maxLength: 8000
+          - type: 'null'
+          title: Stack
+          description: 错误堆栈（如有）
+        page:
+          anyOf:
+          - type: string
+            maxLength: 128
+          - type: 'null'
+          title: Page
+          description: 当前页面路由/区块
+      type: object
+      required:
+      - message
+      title: FrontendLog
+      description: 前端上报的一条日志（仅 warn/error 级别会上报，避免刷屏）
     HTTPValidationError:
       properties:
         detail:
@@ -2668,3 +2733,5 @@ tags:
   description: 要求模板：复用招聘标准并一键应用到职位
 - name: matches
   description: 岗位匹配打分：岗位与候选人的匹配分维护
+- name: logs
+  description: 日志：接收前端上报的异常日志并落盘
