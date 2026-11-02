@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..logging_config import get_audit_logger
 from ..schemas.common import ApiResponse
 from ..schemas.template import (
     ApplyTemplateRequest,
@@ -19,6 +20,7 @@ from ..services.template_service import (
 )
 
 router = APIRouter(prefix="/templates", tags=["templates"])
+audit = get_audit_logger("template")
 
 
 # 注意：把 /items/{item_id} 类路由声明在 /{template_id} 之前，避免路径歧义
@@ -53,9 +55,12 @@ def list_templates(db: Session = Depends(get_db)):
 )
 def create_template(payload: RequirementTemplateCreate, db: Session = Depends(get_db)):
     try:
-        return ApiResponse.ok(TemplateService(db).create(payload))
+        tpl = TemplateService(db).create(payload)
     except ValueError as e:
+        audit.warning("模板创建失败 name=%s error=%s", payload.name, e)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    audit.info("模板创建 id=%s name=%s items=%s", tpl.id, tpl.name, len(tpl.items))
+    return ApiResponse.ok(tpl)
 
 
 @router.get("/{template_id}", response_model=ApiResponse[RequirementTemplateOut], summary="模板详情（含要求项）")
@@ -81,7 +86,9 @@ def delete_template(template_id: int, db: Session = Depends(get_db)):
     try:
         TemplateService(db).delete(template_id)
     except TemplateNotFoundError:
+        audit.warning("模板删除失败：不存在 id=%s", template_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "template not found")
+    audit.info("模板删除 id=%s", template_id)
     return ApiResponse.ok(None, message="deleted")
 
 
@@ -94,7 +101,12 @@ def apply_template(template_id: int, payload: ApplyTemplateRequest, db: Session 
     try:
         result = TemplateService(db).apply(template_id, payload.job_id)
     except TemplateNotFoundError as e:
+        audit.warning("模板应用失败 template_id=%s job_id=%s error=%s", template_id, payload.job_id, e)
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e))
+    audit.info(
+        "模板应用 template_id=%s job_id=%s applied=%s usage_count=%s",
+        template_id, payload.job_id, result.get("applied"), result.get("usage_count"),
+    )
     return ApiResponse.ok(result, message="applied")
 
 

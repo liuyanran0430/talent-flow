@@ -2,11 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..logging_config import get_audit_logger
 from ..schemas.common import ApiResponse
 from ..schemas.job import JobCreate, JobOut, JobUpdate, JobWithStats
 from ..services.job_service import JobNotFoundError, JobService
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+audit = get_audit_logger("job")
 
 
 @router.get("", response_model=ApiResponse[list[JobWithStats]], summary="职位列表")
@@ -31,6 +33,10 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
 @router.post("", response_model=ApiResponse[JobOut], status_code=status.HTTP_201_CREATED, summary="新建职位")
 def create_job(payload: JobCreate, db: Session = Depends(get_db)):
     job = JobService(db).create_job(payload)
+    audit.info(
+        "职位创建 id=%s name=%s dept_id=%s status=%s headcount=%s",
+        job.id, job.name, job.department_id, job.status, job.headcount,
+    )
     return ApiResponse.ok(JobOut.model_validate(job))
 
 
@@ -39,7 +45,10 @@ def update_job(job_id: int, payload: JobUpdate, db: Session = Depends(get_db)):
     try:
         job = JobService(db).update_job(job_id, payload)
     except JobNotFoundError:
+        audit.warning("职位更新失败：不存在 id=%s", job_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    changed = list(payload.model_dump(exclude_unset=True).keys())
+    audit.info("职位更新 id=%s fields=%s status=%s", job_id, changed, job.status)
     return ApiResponse.ok(JobOut.model_validate(job))
 
 
@@ -48,5 +57,7 @@ def delete_job(job_id: int, db: Session = Depends(get_db)):
     try:
         JobService(db).delete_job(job_id)
     except JobNotFoundError:
+        audit.warning("职位删除失败：不存在 id=%s", job_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    audit.info("职位删除 id=%s", job_id)
     return ApiResponse.ok(None, message="deleted")

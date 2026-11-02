@@ -2,11 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..logging_config import get_audit_logger
 from ..schemas.candidate import CandidateCreate, CandidateOut, CandidateUpdate
 from ..schemas.common import ApiResponse, PageResponse
 from ..services.candidate_service import CandidateNotFoundError, CandidateService
 
 router = APIRouter(prefix="/candidates", tags=["candidates"])
+audit = get_audit_logger("candidate")
 
 
 @router.get("", response_model=ApiResponse[PageResponse[CandidateOut]], summary="候选人分页列表")
@@ -36,6 +38,10 @@ def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
 @router.post("", response_model=ApiResponse[CandidateOut], status_code=status.HTTP_201_CREATED, summary="新建候选人")
 def create_candidate(payload: CandidateCreate, db: Session = Depends(get_db)):
     c = CandidateService(db).create_candidate(payload)
+    audit.info(
+        "候选人创建 id=%s job_id=%s name=%s status=%s",
+        c.id, c.resume.job_id if c.resume else None, c.name, c.status,
+    )
     return ApiResponse.ok(CandidateOut.model_validate(c))
 
 
@@ -44,7 +50,13 @@ def update_candidate(candidate_id: int, payload: CandidateUpdate, db: Session = 
     try:
         c = CandidateService(db).update_candidate(candidate_id, payload)
     except CandidateNotFoundError:
+        audit.warning("候选人更新失败：不存在 id=%s", candidate_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "candidate not found")
+    changed = list(payload.model_dump(exclude_unset=True).keys())
+    audit.info(
+        "候选人更新 id=%s job_id=%s fields=%s status=%s",
+        candidate_id, c.resume.job_id if c.resume else None, changed, c.status,
+    )
     return ApiResponse.ok(CandidateOut.model_validate(c))
 
 
@@ -53,5 +65,7 @@ def delete_candidate(candidate_id: int, db: Session = Depends(get_db)):
     try:
         CandidateService(db).delete_candidate(candidate_id)
     except CandidateNotFoundError:
+        audit.warning("候选人删除失败：不存在 id=%s", candidate_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "candidate not found")
+    audit.info("候选人删除 id=%s", candidate_id)
     return ApiResponse.ok(None, message="deleted")

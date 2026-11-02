@@ -1,11 +1,11 @@
 import json
-import logging
+import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal, get_db
-from ..models import Candidate, Job, JobFit, Match, RequirementItem
+from ..models import Candidate, Job, JobFit, Match, RequirementItem, ResumeInfo
 from ..schemas.common import ApiResponse
 from ..schemas.requirement import (
     RecalculatePayload,
@@ -18,9 +18,16 @@ from ..schemas.requirement import (
 from ..services.jd_parser import parse_jd
 from ..services.requirement_service import RequirementNotFoundError, RequirementService
 from ..routers.resumes import run_parse
-from ..logging_config import get_logger
+from ..logging_config import (
+    get_audit_logger,
+    get_logger,
+    get_request_id,
+    reset_request_id,
+    set_request_id,
+)
 
 logger = get_logger("requirements")
+audit = get_audit_logger("requirement")
 
 router = APIRouter(prefix="/requirements", tags=["requirements"])
 
@@ -51,12 +58,15 @@ def generate_from_jd(job_id: int, db: Session = Depends(get_db)):
         data = json.loads(json_str)
         items = [RequirementItemGen(**it) for it in data.get("items", [])]
     except Exception as e:
-        logging.getLogger("uvicorn.error").exception("JD generate failed for job %s", job_id)
+        logger.exception("JD 生成要求项失败 job_id=%s: %s", job_id, e)
+        audit.error("要求项生成失败 job_id=%s error=%s", job_id, e)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"JD 解析失败：{e}")
     if not items:
-        logging.getLogger("uvicorn.error").warning("JD generate returned empty items for job %s", job_id)
+        logger.warning("JD 生成要求项结果为空 job_id=%s", job_id)
+        audit.warning("要求项生成结果为空 job_id=%s", job_id)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "JD 解析结果为空，请重试")
     logger.info("JD生成要求项成功 job_id=%s items=%s", job_id, len(items))
+    audit.info("要求项生成成功 job_id=%s items=%s names=%s", job_id, len(items), [i.name for i in items])
     return ApiResponse.ok(items)
 
 
@@ -83,6 +93,7 @@ def batch_create_items(job_id: int, payload: RequirementBatchCreate, db: Session
         db.flush()
         created.append(item)
     db.commit()
+    audit.info("要求项批量覆盖 job_id=%s items=%s names=%s", job_id, len(created), [i.name for i in created])
     return ApiResponse.ok([RequirementItemOut.model_validate(i) for i in created])
 
 
@@ -142,27 +153,38 @@ def _calc_score(items: list[RequirementItem], fits: list[JobFit], params: Recalc
     }
 
 
-def _recalc_job_candidates(job_id: int, params: RecalculatePayload) -> None:
+def _recalc_job_candidates(
+    job_id: int,
+    params: RecalculatePayload,
+    task_id: str | None = None,
+    request_id: str | None = None,
+) -> None:
     """后台任务：串行重新解析该职位下已解析候选人（重建 jobfits），随后重算得分并写入 matches。"""
+    task_id = task_id or uuid.uuid4().hex[:8]
+    token = set_request_id(request_id) if request_id else None
     db = SessionLocal()
     try:
         cand_ids = [
             c.id
             for c in db.query(Candidate)
-            .filter(Candidate.job_id == job_id, Candidate.status.in_(["review", "finish"]))
+            .join(ResumeInfo, ResumeInfo.candidate_id == Candidate.id)
+            .filter(ResumeInfo.job_id == job_id, Candidate.status.in_(["review", "finish"]))
             .all()
-            if c.resume_path
+            if c.resume and c.resume.resume_path
         ]
+        audit.info("要求重算开始 job_id=%s task=%s candidates=%s", job_id, task_id, len(cand_ids))
         # 逐个重新解析：run_parse 内部自建会话并覆盖式重建 jobfits
+        parse_failed = 0
         for cid in cand_ids:
             try:
-                run_parse(cid, preserve_status=True)
-            except Exception:
-                logging.getLogger("uvicorn.error").exception(
-                    "recalculate parse failed for candidate %s", cid
-                )
+                run_parse(cid, preserve_status=True, task_id=task_id, request_id=get_request_id())
+            except Exception as e:
+                parse_failed += 1
+                logger.exception("要求重算：候选人简历解析失败 candidate_id=%s: %s", cid, e)
+                audit.error("要求重算解析失败 job_id=%s candidate_id=%s task=%s error=%s", job_id, cid, task_id, e)
 
         items = db.query(RequirementItem).filter(RequirementItem.job_id == job_id).all()
+        score_failed = 0
         for cid in cand_ids:
             try:
                 fits = db.query(JobFit).filter(JobFit.candidate_id == cid).all()
@@ -177,13 +199,19 @@ def _recalc_job_candidates(job_id: int, params: RecalculatePayload) -> None:
                         setattr(match, k, v)
                 else:
                     db.add(Match(candidate_id=cid, job_id=job_id, **calc))
-            except Exception:
-                logging.getLogger("uvicorn.error").exception(
-                    "recalculate score failed for candidate %s", cid
-                )
+            except Exception as e:
+                score_failed += 1
+                logger.exception("要求重算：候选人打分失败 candidate_id=%s: %s", cid, e)
+                audit.error("要求重算打分失败 job_id=%s candidate_id=%s task=%s error=%s", job_id, cid, task_id, e)
         db.commit()
         logger.info("要求配置重算完成 job_id=%s candidates=%s", job_id, len(cand_ids))
+        audit.info(
+            "要求重算完成 job_id=%s task=%s candidates=%s parse_failed=%s score_failed=%s",
+            job_id, task_id, len(cand_ids), parse_failed, score_failed,
+        )
     finally:
+        if token is not None:
+            reset_request_id(token)
         db.close()
 
 
@@ -203,17 +231,26 @@ def recalculate_candidates(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
     count = (
         db.query(Candidate)
+        .join(ResumeInfo, ResumeInfo.candidate_id == Candidate.id)
         .filter(
-            Candidate.job_id == job_id,
+            ResumeInfo.job_id == job_id,
             Candidate.status.in_(["review", "finish"]),
-            Candidate.resume_path.isnot(None),
+            ResumeInfo.resume_path.isnot(None),
         )
         .count()
     )
     if count == 0:
         return ApiResponse.ok({"count": 0}, message="no parsed candidates to recalculate")
-    logger.info("要求配置重算启动 job_id=%s candidates=%s", job_id, count)
-    background_tasks.add_task(_recalc_job_candidates, job_id, payload or RecalculatePayload())
+    task_id = uuid.uuid4().hex[:8]
+    logger.info("要求配置重算启动 job_id=%s candidates=%s task=%s", job_id, count, task_id)
+    audit.info("要求重算触发 job_id=%s task=%s candidates=%s", job_id, task_id, count)
+    background_tasks.add_task(
+        _recalc_job_candidates,
+        job_id,
+        payload or RecalculatePayload(),
+        task_id,
+        get_request_id(),
+    )
     return ApiResponse.ok({"count": count}, message="recalculating")
 
 
@@ -228,7 +265,9 @@ def create_item(job_id: int, payload: RequirementItemCreate, db: Session = Depen
     try:
         item = RequirementService(db).create(payload)
     except RequirementNotFoundError:
+        audit.warning("要求项新增失败：职位不存在 job_id=%s", job_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    audit.info("要求项新增 job_id=%s item_id=%s name=%s type=%s importance=%s", job_id, item.id, item.name, item.type, item.importance)
     return ApiResponse.ok(item)
 
 
@@ -241,7 +280,9 @@ def update_item(item_id: int, payload: RequirementItemUpdate, db: Session = Depe
     try:
         item = RequirementService(db).update(item_id, payload)
     except RequirementNotFoundError:
+        audit.warning("要求项更新失败：不存在 item_id=%s", item_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "requirement item not found")
+    audit.info("要求项更新 item_id=%s job_id=%s fields=%s", item_id, item.job_id, list(payload.model_dump(exclude_unset=True).keys()))
     return ApiResponse.ok(item)
 
 
@@ -254,5 +295,7 @@ def delete_item(item_id: int, db: Session = Depends(get_db)):
     try:
         RequirementService(db).delete(item_id)
     except RequirementNotFoundError:
+        audit.warning("要求项删除失败：不存在 item_id=%s", item_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "requirement item not found")
+    audit.info("要求项删除 item_id=%s", item_id)
     return ApiResponse.ok(None, message="deleted")

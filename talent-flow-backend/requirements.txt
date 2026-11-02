@@ -7,3 +7,12 @@ pydantic==2.9.2
 pydantic-settings==2.5.2
 python-multipart==0.0.9
 python-dotenv==1.0.1
+langchain-core==1.6.1
+langchain-openai==1.6.0
+pypdf==6.16.2
+PyYAML==6.0.3
+
+# ---------- OCR 兜底（可选，未安装时静默降级，不影响 PDF/docx/txt/md 解析） ----------
+# rapidocr-onnxruntime  轻量 ONNX 运行时，PaddleOCR 同款中文识别模型，CPU 即可运行
+# pymupdf               将扫描版 PDF 渲染为图像（仅 OCR PDF 时用到）
+# pillow                图片格式处理（rapidocr 的依赖，自动安装亦可）

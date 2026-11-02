@@ -3,6 +3,7 @@ import Icon from '../components/Icon'
 import Modal, { ModalHeader } from '../components/Modal'
 import { useApp } from '../context/AppContext'
 import { upsertCandidateMatch, ALGO_SETTINGS } from '../utils/matchScore'
+import { JobfitTable, AiAnalysisBlock } from '../components/CandidateBlocks'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -58,6 +59,8 @@ export default function Candidates() {
   const [detail, setDetail] = useState(null) // { candidate, fits }
   const [detailLoading, setDetailLoading] = useState(false)
   const [editForm, setEditForm] = useState(null)
+  const [reviewNote, setReviewNote] = useState('') // HR 复核意见
+  const [dirty, setDirty] = useState(false) // 有未保存修改
   const [page, setPage] = useState(1) // 当前页码
 
   const load = async () => {
@@ -170,6 +173,8 @@ export default function Candidates() {
       email: c.email || '',
       experience: c.experience || '',
     })
+    setReviewNote(c.review_note || '')
+    setDirty(false)
     setDetailLoading(true)
     try {
       const fits = await fetchJobfits(c, jobIdMap)
@@ -184,6 +189,7 @@ export default function Candidates() {
   // 修改某条匹配建议，标记为已修改（依据为 AI 解析结果，不允许编辑）
   const setFitField = (fitId, k, v) => {
     setDetail((d) => (d ? { ...d, fits: d.fits.map((f) => (f.id === fitId ? { ...f, [k]: v, _dirty: true } : f)) } : d))
+    setDirty(true)
   }
 
   // 保存所有被修改过的匹配建议
@@ -205,67 +211,91 @@ export default function Candidates() {
     setDetail((d) => (d ? { ...d, fits: d.fits.map(({ _dirty, ...rest }) => rest) } : d))
   }
 
-  // 确认候选人：状态 review→finish，打分存 matches 表，并同步移除导入队列中的对应项
-  const confirmCandidate = async (c) => {
+  const setField = (k, v) => {
+    setEditForm((f) => ({ ...f, [k]: v }))
+    setDirty(true)
+  }
+
+  // 静默关闭弹框（X 按钮/遮罩点击）：丢弃未保存改动，候选人状态不变（等同暂不处理，不弹 toast）
+  const discardDetail = () => {
+    setDirty(false)
+    setDetail(null)
+  }
+
+  // 基础信息校验：与导入预览区一致，四项必填均非空
+  const editValid = !!(
+    editForm &&
+    editForm.name.trim() &&
+    editForm.phone.trim() &&
+    editForm.email.trim() &&
+    editForm.experience.trim()
+  )
+
+  // 三个按钮的统一出口（与导入预览区一致）：
+  // reject=暂不处理(仅关闭,候选人保持 review 待确认)、edit_adopt=先保存基础信息/复核意见/匹配建议再确认、adopt=不保存改动直接确认
+  const handleAdopt = async (mode) => {
+    const c = detail?.candidate
+    if (!c) return
+    // 暂不处理：不改动后端，仅关闭弹框
+    if (mode === 'reject') {
+      setDirty(false)
+      setDetail(null)
+      showToast(`已暂不处理「${editForm.name.trim() || c.name || '未命名'}」，该候选人仍为待确认状态`)
+      return
+    }
+    if (!editValid) { showToast('请补全候选人基础信息后再采纳'); return }
+    // 采纳：有未保存修改时提示将不保存（匹配建议的本地改动也会被丢弃），但已填写的复核意见会保留
+    if (mode === 'adopt' && dirty) {
+      if (!window.confirm('基础信息与匹配建议的改动不会被保存，但已填写的 HR 复核意见会一并保存。确定继续采纳吗？')) return
+    }
     try {
+      if (mode === 'edit_adopt') {
+        // 先保存基础信息 + 复核意见
+        const res = await fetch(`${API_BASE}/candidates/${c.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: editForm.name.trim(),
+            job_id: editForm.job_id ? Number(editForm.job_id) : null,
+            phone: editForm.phone.trim(),
+            email: editForm.email.trim(),
+            experience: editForm.experience.trim(),
+            review_note: reviewNote.trim(),
+          }),
+        })
+        const json = await res.json()
+        if (!res.ok || json.code !== 0) throw new Error(json.message || '保存失败')
+        // 匹配建议的本地改动随「修改后采纳」一并提交
+        await saveFits()
+      }
+      // 确认：状态置为 finish；「采纳」模式下复核意见随本次请求一并提交（单次 PUT，避免两次请求间的覆盖）
       const res = await fetch(`${API_BASE}/candidates/${c.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'finish' }),
-      })
-      const json = await res.json()
-      if (!res.ok || json.code !== 0) throw new Error(json.message || '确认失败')
-      setCandidates((list) => list.map((it) => (it.id === c.id ? { ...it, status: 'finish' } : it)))
-      // 计算匹配打分与各项建议个数并落库
-      if (c.job_id) {
-        try {
-          const saved = await upsertCandidateMatch(c.id, c.job_id)
-          setScores((s) => ({ ...s, [c.id]: saved.score }))
-        } catch { /* 打分失败不影响确认流程 */ }
-      }
-      // 同步移除导入队列中的该候选人
-      setImportQueue((q) => q.filter((it) => it.candidate_id !== c.id))
-      showToast(`已确认「${c.name || '未命名'}」`)
-    } catch (e) {
-      showToast(`确认失败：${e.message}`, 'error')
-    }
-  }
-
-  const setField = (k, v) => setEditForm((f) => ({ ...f, [k]: v }))
-
-  const saveEdit = async () => {
-    if (!editForm.name.trim()) {
-      showToast('请填写候选人姓名')
-      return
-    }
-    try {
-      const res = await fetch(`${API_BASE}/candidates/${detail.candidate.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: editForm.name.trim(),
-          job_id: editForm.job_id ? Number(editForm.job_id) : null,
-          phone: editForm.phone.trim(),
-          email: editForm.email.trim(),
-          experience: editForm.experience.trim(),
+          status: 'finish',
+          ...(mode === 'adopt' ? { review_note: reviewNote.trim() || null } : {}),
         }),
       })
       const json = await res.json()
-      if (!res.ok || json.code !== 0) throw new Error(json.message || '保存失败')
-      setCandidates((list) => list.map((c) => (c.id === detail.candidate.id ? json.data : c)))
-      setDetail((d) => (d ? { ...d, candidate: json.data } : d))
-      // 同步保存被修改的匹配建议，并重算打分与各项建议个数
-      try {
-        await saveFits()
-        if (detail.candidate.job_id) {
-          const saved = await upsertCandidateMatch(detail.candidate.id, detail.candidate.job_id)
-          setScores((s) => ({ ...s, [detail.candidate.id]: saved.score }))
-        }
-      } catch { showToast('', 'error') }
+      if (!res.ok || json.code !== 0) throw new Error(json.message || '确认失败')
+      const fin = json.data
+      // 计算匹配打分与各项建议个数并落库
+      if (fin.job_id) {
+        try {
+          const saved = await upsertCandidateMatch(c.id, fin.job_id)
+          setScores((s) => ({ ...s, [c.id]: saved.score }))
+        } catch { /* 打分失败不影响确认流程 */ }
+      }
+      // 同步本地列表与导入队列
+      setCandidates((list) => list.map((it) => (it.id === c.id ? { ...it, ...fin } : it)))
+      setImportQueue((q) => q.filter((it) => it.candidate_id !== c.id))
+      setDirty(false)
       setDetail(null)
-      showToast(`候选人「${editForm.name.trim()}」信息已更新`)
+      const label = mode === 'adopt' ? '已采纳' : '已修改并采纳'
+      showToast(`${label}「${fin.name || editForm.name.trim() || '未命名'}」`)
     } catch (e) {
-      showToast(`保存失败：${e.message}`, 'error')
+      showToast(`操作失败：${e.message}`, 'error')
     }
   }
 
@@ -283,11 +313,11 @@ export default function Candidates() {
   }
 
   return (
-    <section className="p-8 max-w-[1440px] mx-auto">
+    <section className="p-4 md:p-8 max-w-[1440px] mx-auto">
       <div className="flex items-start justify-between mb-7">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-slate-900">候选人管理</h1>
+            <h1 className="text-xl md:text-2xl font-bold text-slate-900">候选人管理</h1>
             <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>实时更新
             </span>
@@ -302,7 +332,7 @@ export default function Candidates() {
         </button>
       </div>
 
-      <div className="grid grid-cols-4 gap-5 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-5 mb-6">
         {stats.map((s) => (
           <div key={s.label} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between text-sm text-slate-500">
@@ -316,9 +346,9 @@ export default function Candidates() {
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-        <div className="border-b border-slate-200 p-5">
+        <div className="border-b border-slate-200 p-4 md:p-5">
           <div className="flex flex-wrap gap-3">
-            <label className="relative min-w-[300px] flex-1">
+            <label className="relative min-w-0 md:min-w-[300px] w-full md:w-auto flex-1">
               <Icon icon="solar:magnifer-outline" width={18} className="absolute left-3 top-3 text-slate-400" />
               <input
                 value={search}
@@ -345,7 +375,8 @@ export default function Candidates() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* 桌面端表格；移动端隐藏，改用下方卡片列表 */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-xs text-slate-500">
               <tr>
@@ -414,9 +445,10 @@ export default function Candidates() {
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex justify-end gap-2">
-                      <button onClick={() => openDetail(c)} className="font-medium text-cyan-700 hover:text-cyan-900">编辑</button>
-                      {c.status === 'review' && (
-                        <button onClick={() => confirmCandidate(c)} className="font-medium text-emerald-600 hover:text-emerald-900">确认</button>
+                      {c.status === 'review' ? (
+                        <button onClick={() => openDetail(c)} className="font-medium text-emerald-600 hover:text-emerald-900">确认</button>
+                      ) : (
+                        <button onClick={() => openDetail(c)} className="font-medium text-cyan-700 hover:text-cyan-900">编辑</button>
                       )}
                       <button onClick={() => deleteCandidate(c)} className="text-rose-500 hover:text-rose-700">删除</button>
                     </div>
@@ -425,6 +457,64 @@ export default function Candidates() {
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* 移动端卡片列表；桌面端隐藏 */}
+        <div className="md:hidden divide-y divide-slate-100">
+          {loading ? (
+            <div className="px-6 py-12 text-center text-sm text-slate-400">加载中…</div>
+          ) : paginated.map((c) => (
+            <div key={c.id} className="p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 font-bold text-white">
+                  {(c.name || '?').slice(0, 1)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-semibold text-slate-800 truncate">{c.name || '未命名'}</div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${
+                      c.status === 'finish' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+                    }`}>
+                      {c.status === 'finish' ? '已确认' : '待确认'}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {c.job_id ? (jobIdMap.get(c.job_id) || '—') : '—'} · {c.phone || '—'}
+                  </div>
+                  <div className="mt-1 truncate text-xs text-slate-400">{c.email || '—'}</div>
+                  <div className="mt-3 flex items-center justify-between">
+                    <div>
+                      {scores[c.id] != null ? (
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm font-bold ${
+                            scores[c.id] >= 75 ? 'text-emerald-600' : scores[c.id] >= 50 ? 'text-amber-600' : 'text-rose-600'
+                          }`}>{scores[c.id]} 分</span>
+                          <div className="h-1.5 w-16 rounded-full bg-slate-100">
+                            <div
+                              className={`h-full rounded-full ${
+                                scores[c.id] >= 75 ? 'bg-emerald-500' : scores[c.id] >= 50 ? 'bg-amber-500' : 'bg-rose-500'
+                              }`}
+                              style={{ width: `${scores[c.id]}%` }}
+                            ></div>
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-slate-300">—</span>
+                      )}
+                    </div>
+                    <div className="flex gap-4 text-sm">
+                      {c.status === 'review' ? (
+                        <button onClick={() => openDetail(c)} className="font-medium text-emerald-600">确认</button>
+                      ) : (
+                        <button onClick={() => openDetail(c)} className="font-medium text-cyan-700">编辑</button>
+                      )}
+                      <button onClick={() => deleteCandidate(c)} className="font-medium text-rose-500">删除</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
 
         {!loading && filtered.length === 0 && (
@@ -473,12 +563,12 @@ export default function Candidates() {
       </div>
 
       {/* 候选人详情/编辑弹窗（查看与修改合一） */}
-      <Modal open={!!detail} onClose={() => setDetail(null)} maxWidth="max-w-2xl">
+      <Modal open={!!detail} onClose={discardDetail} maxWidth="max-w-2xl">
         {detail && editForm && (
           <>
-            <ModalHeader title={`${detail.candidate.name || '未命名'} · 候选人详情`} subtitle="查看解析信息，可直接修改并保存。" onClose={() => setDetail(null)} />
-            <div className="p-6 max-h-[70vh] overflow-y-auto">
-              <div className="grid grid-cols-2 gap-5">
+            <ModalHeader title={`${detail.candidate.name || '未命名'} · 候选人详情`} subtitle="查看解析信息，可修改后采纳或直接采纳。" onClose={discardDetail} />
+            <div className="p-4 md:p-6 md:max-h-[70vh] overflow-y-auto">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-5">
                 <label className="text-sm font-medium text-slate-700">
                   候选人姓名
                   <input value={editForm.name} onChange={(e) => setField('name', e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-cyan-500" />
@@ -507,52 +597,59 @@ export default function Candidates() {
               </div>
 
               <div className="mt-5">
-                <h3 className="font-semibold text-slate-800">职位匹配建议</h3>
-                {detailLoading ? (
-                  <p className="mt-2 text-sm text-slate-400">加载匹配建议中…</p>
-                ) : detail.fits.length === 0 ? (
-                  <p className="mt-2 text-sm text-slate-400">暂无匹配建议数据。</p>
-                ) : (
-                  <div className="mt-3 rounded-lg border border-slate-200 overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead className="bg-slate-50 text-xs text-slate-500">
-                        <tr>
-                          <th className="px-3 py-2 text-left font-semibold">要求项</th>
-                          <th className="px-3 py-2 text-left font-semibold">匹配建议</th>
-                          <th className="px-3 py-2 text-left font-semibold">依据</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {detail.fits.map((f) => (
-                          <tr key={f.id} className="border-t border-slate-100">
-                            <td className="px-3 py-2 font-medium text-slate-800">{f.name}</td>
-                            <td className="px-3 py-2">
-                              <select
-                                value={f.suggestion}
-                                onChange={(e) => setFitField(f.id, 'suggestion', e.target.value)}
-                                className={`rounded-md border px-2 py-1.5 text-xs font-medium outline-none focus:border-cyan-500 ${
-                                  f.suggestion === '满足' ? 'border-emerald-200 text-emerald-700' : f.suggestion === '不满足' ? 'border-rose-200 text-rose-700' : 'border-amber-200 text-amber-700'
-                                }`}
-                              >
-                                <option>满足</option>
-                                <option>不满足</option>
-                                <option>证据不足</option>
-                              </select>
-                            </td>
-                            <td className="px-3 py-2 text-xs text-slate-600">
-                              {f.evidence || <span className="text-slate-300">—</span>}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                <JobfitTable
+                  fits={detail.fits}
+                  onChangeSuggestion={(fitId, v) => setFitField(fitId, 'suggestion', v)}
+                  loading={detailLoading}
+                  dense
+                />
+              </div>
+
+              <div className="mt-5">
+                <AiAnalysisBlock candidate={detail.candidate} />
+              </div>
+
+              {/* HR 复核意见 */}
+              <div className="mt-5">
+                <label className="block text-sm font-medium text-slate-700">
+                  HR 复核意见
+                  <textarea
+                    value={reviewNote}
+                    onChange={(e) => { setReviewNote(e.target.value); setDirty(true) }}
+                    rows={2}
+                    placeholder="可填写面试安排、跟进要点、薪资预期等备注…"
+                    className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-cyan-500 resize-none"
+                  />
+                </label>
               </div>
             </div>
-            <div className="flex justify-end gap-3 rounded-b-2xl bg-slate-50 px-6 py-4">
-              <button onClick={() => setDetail(null)} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium">关闭</button>
-              <button onClick={saveEdit} className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800">保存修改</button>
+            <div className="flex items-center justify-end gap-3 rounded-b-2xl bg-slate-50 px-6 py-4">
+              {!editValid && (
+                <span className="mr-auto text-xs text-amber-600">基础信息存在空白，补全后方可采纳</span>
+              )}
+              <button
+                onClick={() => handleAdopt('reject')}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
+              >
+                <Icon icon="solar:clock-circle-outline" width={18} />
+                暂不处理
+              </button>
+              <button
+                onClick={() => handleAdopt('edit_adopt')}
+                disabled={!dirty || !editValid}
+                className={`inline-flex items-center gap-2 rounded-lg border border-cyan-200 bg-white px-4 py-2.5 text-sm font-medium text-cyan-700 hover:bg-cyan-50 ${!dirty || !editValid ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                <Icon icon="solar:pen-outline" width={18} />
+                修改后采纳
+              </button>
+              <button
+                onClick={() => handleAdopt('adopt')}
+                disabled={!editValid}
+                className={`inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 ${!editValid ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                <Icon icon="solar:check-circle-outline" width={18} />
+                采纳
+              </button>
             </div>
           </>
         )}

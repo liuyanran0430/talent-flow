@@ -265,22 +265,22 @@ export default function Report() {
   }
 
   return (
-    <section className="p-8 max-w-[1440px] mx-auto">
+    <section className="p-4 md:p-8 max-w-[1440px] mx-auto">
       <div className="flex flex-wrap items-start justify-between gap-4 mb-7">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-slate-900">职位匹配看板</h1>
+            <h1 className="text-xl md:text-2xl font-bold text-slate-900">职位匹配看板</h1>
             <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>分析已完成
             </span>
           </div>
           <p className="mt-2 text-sm text-slate-500">基于选定职位要求，对候选人简历进行多维匹配分析。</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3 w-full md:w-auto">
           <select
             value={deptId}
             onChange={(e) => { setDeptId(e.target.value); setJobId('all') }}
-            className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-700"
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-700 w-full md:w-auto"
           >
             <option value="all">全部部门</option>
             {departments.map((d) => (
@@ -297,7 +297,7 @@ export default function Report() {
                 showToast(`已切换至「${hit?.dept_label ? `${hit.dept_label}-` : ''}${hit?.name || ''}」的匹配分析`)
               }
             }}
-            className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-700 min-w-[200px]"
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-700 w-full md:w-auto min-w-0 md:min-w-[200px]"
           >
             <option value="all">全部职位</option>
             {jobOptions.map((j) => (
@@ -306,16 +306,16 @@ export default function Report() {
           </select>
           <button
             onClick={() => setAlgoOpen(true)}
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium hover:bg-slate-50"
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium hover:bg-slate-50 w-full md:w-auto"
           >
             <Icon icon="solar:settings-outline" width={18} />匹配算法设置
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-5 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-5 mb-6">
         {stats.map((s) => (
-          <div key={s.label} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div key={s.label} className="rounded-xl border border-slate-200 bg-white p-4 md:p-5 shadow-sm">
             <div className="flex items-center justify-between text-sm text-slate-500">
               <span>{s.label}</span>
               <Icon icon={s.icon} width={20} className={s.iconClass} />
@@ -329,9 +329,9 @@ export default function Report() {
         ))}
       </div>
 
-      <div className="grid grid-cols-12 gap-6">
-        <div className="col-span-8 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-4 md:gap-6">
+        <div className="md:col-span-8 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between border-b border-slate-200 px-4 md:px-6 py-4">
             <div>
               <h2 className="font-bold text-slate-900">候选人匹配概览</h2>
               <p className="mt-1 text-xs text-slate-500">点击候选人可查看详细匹配报告。</p>
@@ -363,7 +363,7 @@ export default function Report() {
                 <button
                   key={c.id}
                   onClick={() => setSelectedCandidateId(c.id)}
-                  className={`w-full flex items-center gap-4 px-6 py-4 text-left border-l-2 ${
+                  className={`w-full flex items-center gap-3 md:gap-4 px-4 md:px-6 py-4 text-left border-l-2 ${
                     dimensionCandidate?.id === c.id ? 'bg-slate-50 border-cyan-500' : 'border-transparent hover:bg-slate-50'
                   }`}
                 >
@@ -423,7 +423,7 @@ export default function Report() {
               </div>
             )}
             {!loading && filtered.length > 0 && (
-              <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 md:px-6 py-3.5">
                 <span className="text-xs text-slate-500">
                   共 {filtered.length} 条 · 第 {safePage} / {totalPages} 页
                 </span>
@@ -459,8 +459,8 @@ export default function Report() {
           </div>
         </div>
 
-        <div className="col-span-4 space-y-6">
-          <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="md:col-span-4 space-y-4 md:space-y-6">
+          <div className="rounded-xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm">
             <div>
               <h2 className="font-bold text-slate-900">{dimensionCandidate ? `${dimensionCandidate.name || '未命名'} · 维度分析` : '维度分析'}</h2>
               <p className="mt-1 text-xs text-slate-500">点击左侧列表中的候选人可切换分析对象。</p>
@@ -483,7 +483,7 @@ export default function Report() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="rounded-xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm">
             <h2 className="font-bold text-slate-900">{dimensionCandidate ? `${dimensionCandidate.name || '未命名'} · 关键结论` : '关键结论'}</h2>
             <div className="mt-4 space-y-3 text-sm max-h-[240px] overflow-y-auto">
               {dimensionCandidate ? (
@@ -504,8 +504,8 @@ export default function Report() {
       {/* 匹配算法设置弹窗 */}
       <Modal open={algoOpen} onClose={() => setAlgoOpen(false)} maxWidth="max-w-3xl">
         <ModalHeader title="匹配算法设置" subtitle="配置 AI 对候选人简历的解析维度与推荐阈值。" onClose={() => setAlgoOpen(false)} />
-        <div className="bg-white rounded-xl shadow-sm divide-y divide-slate-200 max-h-[70vh] overflow-y-auto">
-          <div className="p-6">
+        <div className="bg-white rounded-xl shadow-sm divide-y divide-slate-200 md:max-h-[70vh] overflow-y-auto">
+          <div className="p-4 md:p-6">
             <div className="flex justify-between items-start">
               <div>
                 <h2 className="font-bold">要求项权重策略</h2>
@@ -513,7 +513,7 @@ export default function Report() {
               </div>
               <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700">已启用</span>
             </div>
-            <div className="grid grid-cols-3 gap-4 mt-5">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-5">
               {[
                 { key: '高', label: '高重要程度' },
                 { key: '中', label: '中重要程度' },
@@ -537,8 +537,8 @@ export default function Report() {
             </div>
           </div>
 
-          <div className="p-6">
-            <div className="flex justify-between items-center">
+          <div className="p-4 md:p-6">
+            <div className="flex flex-wrap justify-between items-center gap-3">
               <div>
                 <h2 className="font-bold">必备项准入门槛</h2>
                 <p className="text-sm text-slate-500 mt-1">未满足必备要求时，候选人分数将封顶在推荐线以下。</p>
@@ -555,8 +555,8 @@ export default function Report() {
             </div>
           </div>
 
-          <div className="p-6">
-            <div className="flex justify-between items-center">
+          <div className="p-4 md:p-6">
+            <div className="flex flex-wrap justify-between items-center gap-3">
               <div>
                 <h2 className="font-bold">推荐分数阈值</h2>
                 <p className="text-sm text-slate-500 mt-1">达到阈值的候选人将进入推荐队列。</p>

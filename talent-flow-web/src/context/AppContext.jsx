@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import Icon from '../components/Icon'
 import { logger } from '../utils/logger'
 
@@ -37,10 +37,29 @@ export function AppProvider({ children }) {
   // 导入简历页上方选择的部门与职位：同样持久化
   const [importDeptId, setImportDeptId] = useState('')
   const [importJobId, setImportJobId] = useState('')
+  // 移动端侧栏抽屉开合状态
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const openDrawer = useCallback(() => setDrawerOpen(true), [])
+  const closeDrawer = useCallback(() => setDrawerOpen(false), [])
+
+  // 抽屉开启时锁定 body 滚动，防止穿透滚动
+  useEffect(() => {
+    if (!drawerOpen) return
+    document.body.classList.add('overflow-hidden')
+    return () => document.body.classList.remove('overflow-hidden')
+  }, [drawerOpen])
+
+  // 同步当前区块到全局，供 logger 上报 page 字段
+  useEffect(() => {
+    window.__TALENT_SECTION__ = section
+  }, [section])
 
   const navigate = useCallback((key, payload) => {
+    // 页面切换记录到前端日志（仅 info，不上报），配合后端 rid 还原用户操作路径
+    logger.info('nav', '进入页面', key)
     setSection(key)
     setSelectedJob(payload ?? null)
+    setDrawerOpen(false) // 跳转后自动收起移动端抽屉
   }, [])
 
   const showToast = useCallback((text, level = 'info') => {
@@ -71,6 +90,9 @@ export function AppProvider({ children }) {
         setImportDeptId,
         importJobId,
         setImportJobId,
+        drawerOpen,
+        openDrawer,
+        closeDrawer,
       }}
     >
       {children}

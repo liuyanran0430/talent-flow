@@ -56,21 +56,50 @@ class MatchSuggestion(BaseModel):
     evidence: str = Field("", description="匹配依据，引用简历原文关键内容；无依据则为空字符串")
 
 
+class AnalysisPoint(BaseModel):
+    """优势/风险条目：point 是结论，evidence 必须引用简历原文关键内容。
+    业务层强制约束：evidence 为空或太短的优势条目会被过滤掉，不写入最终结果。"""
+
+    point: str = Field(..., max_length=100, description="结论要点，如 '5 年 Python 后端经验'")
+    evidence: str = Field(..., min_length=1, max_length=200, description="证据，直接引用简历原文；必须有具体内容才能保留该条目")
+
+
 class ResumeParseResult(BaseModel):
     """简历解析结果"""
 
     basic: BasicInfo = Field(description="候选人基本信息")
     suggestions: List[MatchSuggestion] = Field(description="职位匹配建议列表")
+    advantages: List[AnalysisPoint] = Field(default_factory=list, description="候选人优势（带证据），无证据的优势不出现")
+    risks: List[AnalysisPoint] = Field(default_factory=list, description="需要关注的风险/短板（带证据）")
 
 
-# ---------- 简历文本提取 ----------
+# ---------- OCR 兜底阈值 ----------
+# pypdf 从扫描版 PDF 抽不到文字时，通常返回空串或极少垃圾字符；
+# 低于该阈值即判定为扫描件，触发 OCR。可在 .env 中通过 OCR_MIN_CHARS 覆盖。
+OCR_MIN_CHARS = int(os.getenv("OCR_MIN_CHARS", "50"))
+# 是否对所有 PDF 都尝试 OCR 兜底（默认 True）
+OCR_ENABLED = os.getenv("OCR_ENABLED", "true").lower() in ("1", "true", "yes")
+
+
 def _extract_pdf_text(path: str) -> str:
     try:
         from pypdf import PdfReader
     except ImportError as e:
         raise ValueError("解析 PDF 需要安装 pypdf：pip install pypdf") from e
     reader = PdfReader(path)
-    return "\n".join(page.extract_text() or "" for page in reader.pages)
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+
+    # 扫描件兜底：pypdf 抽不到足够文本时，尝试 OCR
+    if OCR_ENABLED and len(text.strip()) < OCR_MIN_CHARS:
+        try:
+            from . import ocr as _ocr
+        except ImportError:
+            _ocr = None
+        if _ocr and _ocr.ocr_available():
+            ocr_text = _ocr.ocr_pdf(path)
+            if ocr_text and len(ocr_text) > len(text):
+                text = ocr_text
+    return text
 
 
 def _extract_docx_text(path: str) -> str:
@@ -81,8 +110,26 @@ def _extract_docx_text(path: str) -> str:
     return unescape(re.sub(r"<[^>]+>", "", xml))
 
 
+def _extract_image_text(path: str) -> str:
+    """对 jpg/png/jpeg 等图片简历直接走 OCR"""
+    try:
+        from . import ocr as _ocr
+    except ImportError:
+        _ocr = None
+    if not _ocr or not _ocr.ocr_available():
+        raise ValueError(
+            "图片简历需要 OCR 依赖，请先安装：pip install rapidocr-onnxruntime pillow"
+        )
+    with open(path, "rb") as f:
+        return _ocr.ocr_image_bytes(f.read())
+
+
+# 图片简历支持的扩展名
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
+
+
 def extract_text(path: str) -> str:
-    """按扩展名提取简历文本，支持 pdf/docx/txt/md"""
+    """按扩展名提取简历文本，支持 pdf/docx/txt/md/jpg/png（图片走 OCR）"""
     if not os.path.isfile(path):
         raise ValueError(f"简历文件不存在：{path}")
     ext = os.path.splitext(path)[1].lower()
@@ -93,6 +140,8 @@ def extract_text(path: str) -> str:
     elif ext in (".txt", ".md"):
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             text = f.read()
+    elif ext in _IMAGE_EXTS:
+        text = _extract_image_text(path)
     elif ext == ".doc":
         raise ValueError("暂不支持旧版 .doc 格式，请另存为 .docx 或 .pdf 后重试")
     else:
@@ -124,17 +173,20 @@ def preprocess(payload: dict) -> dict:
 # ---------- 步骤 2：信息抽取与匹配（LLM 提示词 + 输出 Parser） ----------
 parser = PydanticOutputParser(pydantic_object=ResumeParseResult)
 
-system_prompt = """你是一名资深简历解析专家。基于用户提供的简历文本，完成两项任务：
+system_prompt = """你是一名资深简历解析专家。基于用户提供的简历文本，完成四项任务：
 一、提取候选人基本信息：姓名、联系电话、邮箱地址、工作年限
 二、按给定的职位要求项列表（含判定标准），逐项判断候选人匹配情况
+三、列出候选人优势（advantages）：从简历中提炼与岗位要求匹配最突出的 1-5 点。每点必须附 evidence，直接引用简历原文的关键内容，不得编造。如果简历中找不到足够证据支撑某一优势，宁可少写也不要硬凑
+四、列出需关注的风险（risks）：候选人经验不足、技能缺失或明显短板 0-5 点。每点也必须附 evidence；若简历中无明显风险则返回空数组
 
-要求：
+硬性规则：
 1. 基本信息必须来自简历原文，未识别到的字段填 null，严禁编造
 2. 匹配建议只能是：满足/不满足/证据不足
-3. 匹配依据需引用简历原文中的关键内容作为佐证；确实没有依据时给空字符串，严禁编造
-4. 逐项输出所有要求项，name 与输入保持完全一致，不要遗漏、不要新增
-5. 严格按指定 JSON 格式输出，不要附加任何额外说明
-6. 工作年限格式为x年，不要多余文字
+3. 匹配依据、优势/风险的 evidence 必须直接引用简历原文；没有依据时填空字符串或直接省略该条目
+4. 优势（advantages）没有证据的条目不得出现，evidence 为空或太短（少于 6 字）的优势必须直接省略，不能返回
+5. 风险（risks）可以在 evidence 较弱时保留，但仍需尽力引用原文
+6. 逐项输出所有要求项，name 与输入保持完全一致，不要遗漏、不要新增
+7. 严格按指定 JSON 格式输出，不要附加任何额外说明
 
 {format_instructions}
 """
@@ -162,8 +214,18 @@ def build_llm() -> ChatOpenAI:
 
 
 # ---------- 步骤 3：输出校验 ----------
+# 优势 evidence 最小长度：短于此值视为"没有证据"，该优势必须被过滤掉
+# 风险 evidence 放宽（可能简历未明确提及某风险，但仍保留条目提醒 HR 核实）
+_ADVANTAGE_MIN_EVIDENCE_CHARS = 6
+
+
 def _validate(result: ResumeParseResult, requirement_names: List[str]) -> str:
-    """业务层额外校验：建议项与输入要求项一一对齐（缺失补齐，多余剔除）"""
+    """业务层额外校验：
+    1. 建议项与输入要求项一一对齐（缺失补齐，多余剔除）
+    2. 优势强制证据过滤：evidence 为空或太短的优势必须移除，返回空数组而非保留无证据条目
+    3. 风险 evidence 为空的条目保留（提醒 HR 核实），但空数组可接受
+    """
+    # ---- 建议项对齐 ----
     by_name = {s.name: s for s in result.suggestions}
     aligned: List[MatchSuggestion] = []
     for name in requirement_names:
@@ -177,9 +239,19 @@ def _validate(result: ResumeParseResult, requirement_names: List[str]) -> str:
                 )
             )
         else:
-            # LLM 遗漏的要求项，按“证据不足 + 空依据”补齐
             aligned.append(MatchSuggestion(name=name, suggestion="证据不足", evidence=""))
     result.suggestions = aligned
+
+    # ---- 优势强制证据过滤 ----
+    # 规则：evidence 必须非空且不少于 _ADVANTAGE_MIN_EVIDENCE_CHARS 字符
+    result.advantages = [
+        a for a in (result.advantages or [])
+        if a.evidence and len(a.evidence.strip()) >= _ADVANTAGE_MIN_EVIDENCE_CHARS and a.point.strip()
+    ]
+
+    # ---- 风险：evidence 为空的条目保留但 point 必须非空 ----
+    result.risks = [r for r in (result.risks or []) if r.point.strip()]
+
     return json.dumps(result.model_dump(), ensure_ascii=False)
 
 

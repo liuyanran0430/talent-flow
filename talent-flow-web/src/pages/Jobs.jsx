@@ -203,11 +203,11 @@ export default function Jobs() {
   }
 
   return (
-    <section className="p-8 max-w-[1440px] mx-auto">
+    <section className="p-4 md:p-8 max-w-[1440px] mx-auto">
       <div className="flex flex-wrap items-start justify-between gap-4 mb-7">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-slate-900">职位管理</h1>
+            <h1 className="text-xl md:text-2xl font-bold text-slate-900">职位管理</h1>
             <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
               {jobs.filter((j) => j.status === 'open').length} 个进行中
@@ -231,7 +231,7 @@ export default function Jobs() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-5 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-5 mb-6">
         {stats.map((s) => (
           <div key={s.label} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between text-sm text-slate-500">
@@ -245,9 +245,9 @@ export default function Jobs() {
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-        <div className="border-b border-slate-200 p-5">
+        <div className="border-b border-slate-200 p-4 md:p-5">
           <div className="flex flex-wrap gap-3">
-            <label className="relative min-w-[280px] flex-1">
+            <label className="relative min-w-0 md:min-w-[280px] w-full md:w-auto flex-1">
               <Icon icon="solar:magnifer-outline" width={18} className="absolute left-3 top-3 text-slate-400" />
               <input
                 value={search}
@@ -285,7 +285,8 @@ export default function Jobs() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* 桌面端表格；移动端隐藏，改用下方卡片列表 */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-xs text-slate-500">
               <tr>
@@ -342,6 +343,41 @@ export default function Jobs() {
           </table>
         </div>
 
+        {/* 移动端卡片列表；桌面端隐藏 */}
+        <div className="md:hidden divide-y divide-slate-100">
+          {paginated.map((j) => {
+            const st = STATUS_MAP[j.status] || STATUS_MAP.open
+            return (
+              <div key={j.id} className="p-4">
+                <div className="flex items-start gap-3">
+                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${st.iconBg}`}>
+                    <Icon icon="solar:case-round-outline" width={20} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-semibold text-slate-800 truncate">{j.name}</div>
+                      <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${st.badge}`}>{st.label}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {j.dept_label || '未分配部门'} · 招聘 {j.headcount} 人 · 候选人 {j.candidates ?? 0} 人
+                    </div>
+                    <div className="mt-3 flex gap-4 text-sm">
+                      <button onClick={() => openJobForm(j)} className="font-medium text-cyan-700">编辑</button>
+                      <button
+                        onClick={() => navigate('requirements', { jobId: j.id })}
+                        disabled={j.status !== 'open'}
+                        className="font-medium text-cyan-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        要求配置
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
         {filtered.length === 0 && (
           <div className="px-6 py-12 text-center">
             <Icon icon="solar:magnifer-outline" width={34} className="text-slate-300" />
@@ -390,7 +426,7 @@ export default function Jobs() {
       {/* 新建/编辑职位弹窗 */}
       <Modal open={formOpen} onClose={() => setFormOpen(false)} maxWidth="max-w-2xl">
         <ModalHeader title={formJobId ? '编辑职位' : '新建职位'} subtitle="填写基础信息后即可关联部门与职位要求。" onClose={() => setFormOpen(false)} />
-        <div className="grid grid-cols-2 gap-5 p-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-5 p-4 md:p-6">
           <label className="text-sm font-medium text-slate-700">
             职位名称
             <input
@@ -419,7 +455,7 @@ export default function Jobs() {
               {Object.entries(STATUS_MAP).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
             </select>
           </label>
-          <label className="col-span-2 text-sm font-medium text-slate-700">
+          <label className="md:col-span-2 text-sm font-medium text-slate-700">
             职位要求
             <textarea
               value={formDescription}
@@ -444,7 +480,7 @@ export default function Jobs() {
           subtitle="维护部门列表，用于职位关联与组织管理。"
           onClose={() => setDeptOpen(false)}
         />
-        <div className="grid grid-cols-2 gap-6 p-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 p-4 md:p-6">
           {/* 已有部门列表 */}
           <div className="flex flex-col">
             <div className="mb-2 flex items-center justify-between">

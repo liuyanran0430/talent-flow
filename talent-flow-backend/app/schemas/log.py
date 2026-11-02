@@ -12,3 +12,6 @@ class FrontendLog(BaseModel):
     message: str = Field(..., max_length=4000, description="日志内容")
     stack: Optional[str] = Field(None, max_length=8000, description="错误堆栈（如有）")
     page: Optional[str] = Field(None, max_length=128, description="当前页面路由/区块")
+    session_id: Optional[str] = Field(None, max_length=64, description="前端会话 id，用于串联同一用户操作")
+    url: Optional[str] = Field(None, max_length=500, description="触发日志时的页面地址")
+    user_agent: Optional[str] = Field(None, max_length=500, description="浏览器 UA")

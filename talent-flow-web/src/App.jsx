@@ -1,5 +1,6 @@
 import { AppProvider, useApp } from './context/AppContext'
 import Sidebar from './components/Sidebar'
+import MobileHeader from './components/MobileHeader'
 import Header from './components/Header'
 import Jobs from './pages/Jobs'
 import Requirements from './pages/Requirements'
@@ -29,10 +30,13 @@ function Shell() {
   return (
     <div className="min-h-screen flex">
       <Sidebar />
-      <main className="flex-1 min-w-0">
-        <Header />
-        <Pages />
-      </main>
+      <div className="flex-1 min-w-0 flex flex-col">
+        <MobileHeader />
+        <main className="flex-1 min-w-0">
+          <Header />
+          <Pages />
+        </main>
+      </div>
     </div>
   )
 }

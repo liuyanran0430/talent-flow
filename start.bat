@@ -11,9 +11,9 @@ rem    status  Show port usage
 rem    help    Show this help
 rem ============================================================
 
-set "ROOT=E:\program"
-set "FRONTEND=%ROOT%\talent-flow"
-set "BACKEND=%ROOT%\talent-flow-backend"
+set "ROOT=%~dp0"
+set "FRONTEND=%ROOT%talent-flow-web"
+set "BACKEND=%ROOT%talent-flow-backend"
 set "PYEXE=%BACKEND%\.venv\Scripts\python.exe"
 
 set "CMD=%~1"

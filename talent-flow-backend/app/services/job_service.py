@@ -2,7 +2,7 @@ from sqlalchemy import Integer, cast, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from ..models import Candidate, Job, RequirementItem
+from ..models import Candidate, Job, RequirementItem, ResumeInfo
 from ..schemas.job import JobCreate, JobStatus, JobUpdate, JobWithStats, STATUS_LABEL_MAP
 
 
@@ -101,12 +101,13 @@ class JobService:
             return {}
         stmt = (
             select(
-                Candidate.job_id,
+                ResumeInfo.job_id,
                 func.count().label("total"),
                 func.sum(cast(Candidate.status == "hired", Integer)).label("hired"),
             )
-            .where(Candidate.job_id.in_(job_ids))
-            .group_by(Candidate.job_id)
+            .join(Candidate, Candidate.id == ResumeInfo.candidate_id)
+            .where(ResumeInfo.job_id.in_(job_ids))
+            .group_by(ResumeInfo.job_id)
         )
         rows = self.db.execute(stmt).all()
         return {row.job_id: (int(row.hired or 0), int(row.total or 0)) for row in rows}

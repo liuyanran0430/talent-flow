@@ -6,7 +6,7 @@ export default function Header() {
   const current = SECTIONS.find((s) => s.key === section)
 
   return (
-    <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8">
+    <header className="h-16 bg-white border-b border-slate-200 hidden md:flex items-center justify-between px-8">
       <div className="flex items-center gap-2 text-sm text-slate-500">
         <span>招聘配置</span>
         <Icon icon="solar:alt-arrow-right-outline" width={14} />

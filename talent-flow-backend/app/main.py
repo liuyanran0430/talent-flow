@@ -6,13 +6,20 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .database import init_db
-from .logging_config import get_logger, setup_logging
+from .logging_config import (
+    get_logger,
+    new_request_id,
+    reset_request_id,
+    set_request_id,
+    setup_logging,
+)
 from .routers import candidates, departments, jobfits, jobs, logs, matches, requirements, resumes, templates
 from .schemas.common import ApiResponse
 
 # 模块导入即初始化：uvicorn --reload 启动/热重载后自动生效，日志写入 logs/ 目录
 setup_logging()
 access_logger = get_logger("http")
+lifecycle_logger = get_logger("lifecycle")
 
 # OpenAPI 文档按功能模块分组，与每个 router 的 tags 一一绑定
 TAGS_METADATA = [
@@ -29,8 +36,13 @@ TAGS_METADATA = [
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    lifecycle_logger.info(
+        "应用启动 name=%s env=%s debug=%s", settings.APP_NAME, settings.APP_ENV, settings.APP_DEBUG
+    )
     init_db()
+    lifecycle_logger.info("数据库初始化完成")
     yield
+    lifecycle_logger.info("应用关闭")
 
 
 app = FastAPI(
@@ -47,26 +59,51 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],  # 允许前端 JS 读取 trace id
 )
 
 
+def _client_ip(request: Request) -> str:
+    """获取真实客户端 IP：优先反向代理头，其次直连地址"""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()[:64]
+    return request.client.host if request.client else "-"
+
+
 @app.middleware("http")
-async def access_log_middleware(request: Request, call_next):
-    """请求访问日志：写操作全量记录；GET 仅记录非 2xx 或慢请求（>500ms），避免轮询刷屏"""
+async def request_trace_middleware(request: Request, call_next):
+    """请求级追溯：分配/复用 X-Request-ID，写入日志上下文并回传响应头。
+
+    访问日志规则：写操作全量记录；GET 仅记录非 2xx 或慢请求（>500ms），避免轮询刷屏。
+    """
+    incoming = request.headers.get("X-Request-ID")
+    request_id = (incoming or "").strip()[:64] or new_request_id()
+    token = set_request_id(request_id)
+    request.state.request_id = request_id
+
     start = time.perf_counter()
+    method, path, client = request.method, request.url.path, _client_ip(request)
     try:
         response = await call_next(request)
     except Exception:
+        duration_ms = (time.perf_counter() - start) * 1000
         access_logger.exception(
-            "%s %s -> 500 (unhandled)", request.method, request.url.path
+            "%s %s -> 500 (unhandled) client=%s (%.0fms)", method, path, client, duration_ms
         )
+        reset_request_id(token)
         raise
+
     duration_ms = (time.perf_counter() - start) * 1000
-    method, path, code = request.method, request.url.path, response.status_code
+    code = response.status_code
+    response.headers["X-Request-ID"] = request_id
     if method in ("POST", "PUT", "DELETE", "PATCH") or code >= 400 or duration_ms > 500:
-        access_logger.info("%s %s -> %s (%.0fms)", method, path, code, duration_ms)
+        access_logger.info(
+            "%s %s -> %s client=%s (%.0fms)", method, path, code, client, duration_ms
+        )
     if code >= 500:
-        access_logger.error("%s %s -> %s", method, path, code)
+        access_logger.error("%s %s -> %s client=%s", method, path, code, client)
+    reset_request_id(token)
     return response
 
 

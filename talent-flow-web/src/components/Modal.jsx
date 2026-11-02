@@ -6,8 +6,9 @@ import Icon from './Icon'
 export default function Modal({ open, onClose, children, maxWidth = 'max-w-lg', z = 'z-30' }) {
   if (!open) return null
   return (
-    <div className={`fixed inset-0 ${z} bg-slate-950/45 flex items-center justify-center p-5`}>
-      <div className={`w-full ${maxWidth} rounded-2xl bg-white shadow-2xl`}>{children}</div>
+    <div className={`fixed inset-0 ${z} bg-slate-950/45 flex items-stretch md:items-center justify-center p-0 md:p-5`}>
+      {/* 移动端全屏弹框，桌面端保持居中卡片 */}
+      <div className={`w-full ${maxWidth} rounded-none md:rounded-2xl bg-white shadow-2xl h-full md:h-auto max-h-full md:max-h-[90vh] overflow-y-auto`}>{children}</div>
     </div>
   )
 }
