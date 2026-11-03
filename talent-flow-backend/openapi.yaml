@@ -1442,7 +1442,8 @@ components:
           default: ok
         data:
           anyOf:
-          - type: object
+          - additionalProperties: true
+            type: object
           - type: 'null'
           title: Data
       type: object
@@ -1613,21 +1614,11 @@ components:
             maxLength: 64
           - type: 'null'
           title: Name
-        job_id:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          title: Job Id
         status:
           type: string
           title: Status
-          description: recommended/interview/review/hired/rejected/finish
+          description: pending/processing/review/finish
           default: review
-        info:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Info
         phone:
           anyOf:
           - type: string
@@ -1640,12 +1631,28 @@ components:
             maxLength: 128
           - type: 'null'
           title: Email
+        review_note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Review Note
+          description: HR 复核意见
+        job_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Job Id
         experience:
           anyOf:
           - type: string
             maxLength: 32
           - type: 'null'
           title: Experience
+        info:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Info
         resume_path:
           anyOf:
           - type: string
@@ -1670,21 +1677,11 @@ components:
             maxLength: 64
           - type: 'null'
           title: Name
-        job_id:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          title: Job Id
         status:
           type: string
           title: Status
-          description: recommended/interview/review/hired/rejected/finish
+          description: pending/processing/review/finish
           default: review
-        info:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Info
         phone:
           anyOf:
           - type: string
@@ -1697,26 +1694,28 @@ components:
             maxLength: 128
           - type: 'null'
           title: Email
+        review_note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Review Note
+          description: HR 复核意见
+        job_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Job Id
         experience:
           anyOf:
           - type: string
             maxLength: 32
           - type: 'null'
           title: Experience
-        resume_path:
+        info:
           anyOf:
           - type: string
-            maxLength: 255
           - type: 'null'
-          title: Resume Path
-          description: 简历文件路径
-        resume_hash:
-          anyOf:
-          - type: string
-            maxLength: 64
-          - type: 'null'
-          title: Resume Hash
-          description: 简历内容哈希，用于查重
+          title: Info
         id:
           type: integer
           title: Id
@@ -1728,11 +1727,41 @@ components:
           type: string
           format: date-time
           title: Updated At
+        resume_path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Resume Path
+          description: 简历文件路径
+        analysis:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Analysis
+          description: AI 分析原始 JSON
+        advantages:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Advantages
+          description: 结构化的优势列表 [{point, evidence}]，无优势时返回空数组
+          readOnly: true
+        risks:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Risks
+          description: 结构化的风险列表 [{point, evidence}]，无风险时返回空数组
+          readOnly: true
       type: object
       required:
       - id
       - created_at
       - updated_at
+      - advantages
+      - risks
       title: CandidateOut
     CandidateUpdate:
       properties:
@@ -1742,21 +1771,11 @@ components:
             maxLength: 64
           - type: 'null'
           title: Name
-        job_id:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          title: Job Id
         status:
           anyOf:
           - type: string
           - type: 'null'
           title: Status
-        info:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Info
         phone:
           anyOf:
           - type: string
@@ -1767,16 +1786,27 @@ components:
           - type: string
           - type: 'null'
           title: Email
+        review_note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Review Note
+          description: HR 复核意见
+        job_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Job Id
         experience:
           anyOf:
           - type: string
           - type: 'null'
           title: Experience
-        resume_path:
+        info:
           anyOf:
           - type: string
           - type: 'null'
-          title: Resume Path
+          title: Info
       type: object
       title: CandidateUpdate
     DepartmentCreate:
@@ -1876,6 +1906,27 @@ components:
           - type: 'null'
           title: Page
           description: 当前页面路由/区块
+        session_id:
+          anyOf:
+          - type: string
+            maxLength: 64
+          - type: 'null'
+          title: Session Id
+          description: 前端会话 id，用于串联同一用户操作
+        url:
+          anyOf:
+          - type: string
+            maxLength: 500
+          - type: 'null'
+          title: Url
+          description: 触发日志时的页面地址
+        user_agent:
+          anyOf:
+          - type: string
+            maxLength: 500
+          - type: 'null'
+          title: User Agent
+          description: 浏览器 UA
       type: object
       required:
       - message

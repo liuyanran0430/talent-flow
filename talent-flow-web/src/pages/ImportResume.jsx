@@ -3,9 +3,8 @@ import Icon from '../components/Icon'
 import Modal, { ModalHeader } from '../components/Modal'
 import { useApp } from '../context/AppContext'
 import { upsertCandidateMatch } from '../utils/matchScore'
+import { API_BASE, apiFetch } from '../utils/api'
 import { JobfitTable, AiAnalysisBlock } from '../components/CandidateBlocks'
-
-const API_BASE = 'http://localhost:8000'
 
 const PAGE_SIZE = 5 // 导入队列每页条数
 const ALLOWED = ['pdf', 'doc', 'docx']
@@ -17,7 +16,7 @@ async function uploadResume(file, jobId) {
   fd.append('file', file)
   fd.append('name', file.name.replace(/\.[^.]+$/, ''))
   if (jobId) fd.append('job_id', jobId)
-  const res = await fetch(`${API_BASE}/resumes/upload`, { method: 'POST', body: fd })
+  const res = await apiFetch(`${API_BASE}/resumes/upload`, { method: 'POST', body: fd })
   const json = await res.json()
   if (!res.ok || json.code !== 0) throw new Error(json.message || `上传失败 (${res.status})`)
   return { candidate_id: json.data.candidate_id, message: json.message }
@@ -25,7 +24,7 @@ async function uploadResume(file, jobId) {
 
 // 调用 GET /candidates/{id} 从数据库获取候选人详情（识别结果预览数据来源）
 async function fetchCandidate(id) {
-  const res = await fetch(`${API_BASE}/candidates/${id}`)
+  const res = await apiFetch(`${API_BASE}/candidates/${id}`)
   const json = await res.json()
   if (!res.ok || json.code !== 0) throw new Error(json.message || '查询失败')
   return json.data
@@ -38,7 +37,7 @@ function pollCandidate(id, { onUpdate, interval = 1500, maxFailures = 5, resolve
     let failures = 0
     const tick = async () => {
       try {
-        const res = await fetch(`${API_BASE}/candidates/${id}`)
+        const res = await apiFetch(`${API_BASE}/candidates/${id}`)
         const json = await res.json()
         if (!res.ok || json.code !== 0) throw new Error(json.message || '查询失败')
         failures = 0
@@ -104,7 +103,7 @@ export default function ImportResume() {
   }, [hasProcessing])
 
   useEffect(() => {
-    fetch(`${API_BASE}/departments`)
+    apiFetch(`${API_BASE}/departments`)
       .then((r) => r.json())
       .then((json) => { if (json.code === 0) setDepartments(json.data || []) })
       .catch(() => {})
@@ -118,7 +117,7 @@ export default function ImportResume() {
       setSelectedJobId('')
     }
     if (!selectedDeptId) { setJobs([]); return }
-    fetch(`${API_BASE}/jobs`)
+    apiFetch(`${API_BASE}/jobs`)
       .then((r) => r.json())
       .then((json) => {
         if (json.code === 0) setJobs((json.data || []).filter((j) => j.department_id === Number(selectedDeptId)))
@@ -140,9 +139,9 @@ export default function ImportResume() {
     if (!candidate?.id) { setMatchRows([]); return }
     try {
       const [fitRes, reqRes] = await Promise.all([
-        fetch(`${API_BASE}/jobfits/candidates/${candidate.id}`),
+        apiFetch(`${API_BASE}/jobfits/candidates/${candidate.id}`),
         candidate.job_id
-          ? fetch(`${API_BASE}/requirements/${candidate.job_id}/items`)
+          ? apiFetch(`${API_BASE}/requirements/${candidate.job_id}/items`)
           : Promise.resolve(null),
       ])
       const fitJson = await fitRes.json()
@@ -168,7 +167,7 @@ export default function ImportResume() {
   const saveMatchRows = async () => {
     await Promise.all(
       matchRows.map((f) =>
-        fetch(`${API_BASE}/jobfits/${f.id}`, {
+        apiFetch(`${API_BASE}/jobfits/${f.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ suggestion: f.suggestion }),
@@ -313,7 +312,7 @@ export default function ImportResume() {
   const startAnalyze = async (item) => {
     if (!item.candidate_id) return
     try {
-      const res = await fetch(`${API_BASE}/resumes/${item.candidate_id}/analyze`, { method: 'POST' })
+      const res = await apiFetch(`${API_BASE}/resumes/${item.candidate_id}/analyze`, { method: 'POST' })
       const json = await res.json()
       if (!res.ok || json.code !== 0) throw new Error(json.message || '启动解析失败')
       setQueue((q) =>
@@ -350,7 +349,7 @@ export default function ImportResume() {
   const confirmCandidate = async (f) => {
     if (!f.candidate_id) return
     try {
-      const res = await fetch(`${API_BASE}/candidates/${f.candidate_id}`, {
+      const res = await apiFetch(`${API_BASE}/candidates/${f.candidate_id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'finish' }),
@@ -391,7 +390,7 @@ export default function ImportResume() {
     await Promise.all(
       pendingItems.map(async (it) => {
         try {
-          await fetch(`${API_BASE}/candidates/${it.candidate_id}`, { method: 'DELETE' })
+          await apiFetch(`${API_BASE}/candidates/${it.candidate_id}`, { method: 'DELETE' })
         } catch { /* 删除失败不阻塞清空 */ }
       })
     )
@@ -431,7 +430,7 @@ export default function ImportResume() {
     if (mode === 'edit_adopt') {
       if (!valid) { showToast('请先补全并校验候选人信息'); return }
       try {
-        const res = await fetch(`${API_BASE}/candidates/${selected.id}`, {
+        const res = await apiFetch(`${API_BASE}/candidates/${selected.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -453,7 +452,7 @@ export default function ImportResume() {
     }
     // 确认：状态置为 finish；「采纳」模式下复核意见随本次请求一并提交（单次 PUT，避免两次请求间的覆盖）
     try {
-      const res = await fetch(`${API_BASE}/candidates/${selected.id}`, {
+      const res = await apiFetch(`${API_BASE}/candidates/${selected.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

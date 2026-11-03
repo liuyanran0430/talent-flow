@@ -18,19 +18,15 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import List, Literal
 
-import dotenv
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-dotenv.load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
+from ..llm import get_model_client
 
 
 # ---------- 输出 Schema（输出校验依据） ----------
@@ -83,17 +79,6 @@ classify_prompt = ChatPromptTemplate.from_messages(
 ).partial(format_instructions=parser.get_format_instructions())
 
 
-def build_llm() -> ChatOpenAI:
-    return ChatOpenAI(
-        model=os.getenv("LLM_MODEL", "deepseek-v4-pro"),
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_API_BASE"),
-        temperature=0.2,
-        timeout=120,  # 超时防止 API 挂起导致前端长时间等待
-        max_retries=2,  # 偶发 503/超时自动重试
-    )
-
-
 # ---------- 步骤 3：输出校验 ----------
 def validate(result: RequirementList) -> str:
     """业务层额外校验：非空、数量上限、名称去重"""
@@ -115,7 +100,7 @@ def validate(result: RequirementList) -> str:
 # ---------- 编排 chain ----------
 def build_chain():
     """构建 LCEL chain：preprocess → classify_prompt → llm → parser → validate"""
-    llm = build_llm()
+    llm = get_model_client().chat_model
     return (
         RunnableLambda(preprocess)
         | classify_prompt

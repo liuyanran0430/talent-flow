@@ -4,7 +4,7 @@
 //   2. 基础分 Base = 100 × Σ(权重 × 单项得分) / Σ权重（仅"必须"类要求项，权重按重要程度）
 //   3. 必备项准入门槛：必须项满足率 < 门槛时，分数封顶在推荐线以下
 //   4. 加分项：每满足一项 +2 分，上限 +6 分，总分封顶 100
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from './api'
 
 // 匹配算法设置（localStorage 持久化，修改请调用 updateAlgoSettings）
 const DEFAULT_ALGO_SETTINGS = {
@@ -88,8 +88,8 @@ export function calculateScore(items, fits) {
 // 拉取数据并计算某候选人在某职位的匹配得分与建议项个数
 export async function computeCandidateScore(candidateId, jobId) {
   const [fitRes, reqRes] = await Promise.all([
-    fetch(`${API_BASE}/jobfits/candidates/${candidateId}`),
-    fetch(`${API_BASE}/requirements/${jobId}/items`),
+    apiFetch(`${API_BASE}/jobfits/candidates/${candidateId}`),
+    apiFetch(`${API_BASE}/requirements/${jobId}/items`),
   ])
   const fitJson = await fitRes.json()
   const reqJson = await reqRes.json()
@@ -109,12 +109,12 @@ export async function upsertCandidateMatch(candidateId, jobId) {
   const { score, counts } = await computeCandidateScore(candidateId, jobId)
   const payload = { job_id: jobId, candidate_id: candidateId, score, ...counts }
 
-  const listRes = await fetch(`${API_BASE}/matches/candidates/${candidateId}`)
+  const listRes = await apiFetch(`${API_BASE}/matches/candidates/${candidateId}`)
   const listJson = await listRes.json()
   if (!listRes.ok || listJson.code !== 0) throw new Error(listJson.message || '打分查询失败')
   const hit = (listJson.data || []).find((m) => m.job_id === jobId)
 
-  const res = await fetch(`${API_BASE}/matches${hit ? `/${hit.id}` : ''}`, {
+  const res = await apiFetch(`${API_BASE}/matches${hit ? `/${hit.id}` : ''}`, {
     method: hit ? 'PUT' : 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

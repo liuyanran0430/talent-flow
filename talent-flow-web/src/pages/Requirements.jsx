@@ -3,6 +3,7 @@ import Icon from '../components/Icon'
 import Modal, { ModalHeader } from '../components/Modal'
 import { useApp } from '../context/AppContext'
 import { ALGO_SETTINGS } from '../utils/matchScore'
+import { apiFetch } from '../utils/api'
 
 const IMPORTANCE_STARS = { 高: '★★★', 中: '★★☆', 低: '★☆☆' }
 
@@ -30,8 +31,8 @@ export default function Requirements() {
     const load = async () => {
       try {
         const [deptRes, jobRes] = await Promise.all([
-          fetch('http://localhost:8000/departments'),
-          fetch('http://localhost:8000/jobs'),
+          apiFetch('http://localhost:8080/departments'),
+          apiFetch('http://localhost:8080/jobs'),
         ])
         const [deptJson, jobJson] = await Promise.all([deptRes.json(), jobRes.json()])
         setDepartments(deptJson.data || [])
@@ -96,7 +97,7 @@ export default function Requirements() {
 
   const fetchRequirements = async (jobId) => {
     try {
-      const res = await fetch(`http://localhost:8000/requirements/${jobId}/items`)
+      const res = await apiFetch(`http://localhost:8080/requirements/${jobId}/items`)
       const json = await res.json()
       if (json.code === 0) {
         const IMPORTANCE_ORDER = { 高: 0, 中: 1, 低: 2 }
@@ -118,7 +119,7 @@ export default function Requirements() {
     if (!jobId) return
     let parsedCount = 0
     try {
-      const res = await fetch(`http://localhost:8000/candidates?job_id=${jobId}&page_size=200`)
+      const res = await apiFetch(`http://localhost:8080/candidates?job_id=${jobId}&page_size=200`)
       const json = await res.json()
       const list = (json.data?.items || json.data || []).filter((c) => c.status === 'review' || c.status === 'finish')
       parsedCount = list.length
@@ -126,7 +127,7 @@ export default function Requirements() {
     if (!parsedCount) return
     if (!window.confirm(`该职位已有 ${parsedCount} 位已解析候选人，是否重新计算其匹配建议与AI得分？\n将重新解析简历并覆盖现有匹配建议（含人工修改），该操作不可恢复。`)) return
     try {
-      const res = await fetch(`http://localhost:8000/requirements/${jobId}/recalculate`, {
+      const res = await apiFetch(`http://localhost:8080/requirements/${jobId}/recalculate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -164,7 +165,7 @@ export default function Requirements() {
     setJdGenOpen(true)
     setJdLoading(true)
     try {
-      const res = await fetch(`http://localhost:8000/jobs/${selectedJobId}`)
+      const res = await apiFetch(`http://localhost:8080/jobs/${selectedJobId}`)
       const json = await res.json()
       if (json.code === 0) setJdContent(json.data.description || '')
     } catch {
@@ -178,7 +179,7 @@ export default function Requirements() {
     if (!jdContent.trim()) { showToast('该职位未填写职位要求（JD），无法生成'); return }
     setGenerating(true)
     try {
-      const res = await fetch(`http://localhost:8000/requirements/${selectedJobId}/generate`, { method: 'POST' })
+      const res = await apiFetch(`http://localhost:8080/requirements/${selectedJobId}/generate`, { method: 'POST' })
       const json = await res.json()
       if (!res.ok || json.code !== 0) throw new Error(json.message || json.detail?.[0]?.msg || '生成失败')
       setGenResult(json.data || [])
@@ -200,7 +201,7 @@ export default function Requirements() {
     if (genResult.some((it) => !it.name.trim())) { showToast('要求项名称不能为空'); return }
     setApplying(true)
     try {
-      const res = await fetch(`http://localhost:8000/requirements/${selectedJobId}/items/batch`, {
+      const res = await apiFetch(`http://localhost:8080/requirements/${selectedJobId}/items/batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -238,7 +239,7 @@ export default function Requirements() {
 
   const fetchTemplates = async () => {
     try {
-      const res = await fetch('http://localhost:8000/templates')
+      const res = await apiFetch('http://localhost:8080/templates')
       const json = await res.json()
       if (json.code === 0) setTemplates(json.data || [])
     } catch {
@@ -276,9 +277,9 @@ export default function Requirements() {
     const isEdit = !!editingItemId
     try {
       const url = isEdit
-        ? `http://localhost:8000/requirements/items/${editingItemId}`
-        : `http://localhost:8000/requirements/${selectedJobId}/items`
-      const res = await fetch(url, {
+        ? `http://localhost:8080/requirements/items/${editingItemId}`
+        : `http://localhost:8080/requirements/${selectedJobId}/items`
+      const res = await apiFetch(url, {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -303,7 +304,7 @@ export default function Requirements() {
   const deleteRequirement = async (item) => {
     if (!window.confirm(`确定删除要求项「${item.name}」吗？此操作不可恢复。`)) return
     try {
-      const res = await fetch(`http://localhost:8000/requirements/items/${item.id}`, { method: 'DELETE' })
+      const res = await apiFetch(`http://localhost:8080/requirements/items/${item.id}`, { method: 'DELETE' })
       const json = await res.json()
       if (!res.ok || json.code !== 0) throw new Error(json.message || '删除失败')
       showToast('要求项已删除')
@@ -320,7 +321,7 @@ export default function Requirements() {
     if (!window.confirm(`确定清空「${selectedJobLabel}」的所有要求项吗？此操作不可恢复。`)) return
     try {
       for (const r of requirements) {
-        await fetch(`http://localhost:8000/requirements/items/${r.id}`, { method: 'DELETE' })
+        await apiFetch(`http://localhost:8080/requirements/items/${r.id}`, { method: 'DELETE' })
       }
       await fetchRequirements()
       showToast('已清空所有要求项')
@@ -341,7 +342,7 @@ export default function Requirements() {
     }
     setApplyingTplId(tpl.id)
     try {
-      const res = await fetch(`http://localhost:8000/templates/${tpl.id}/apply`, {
+      const res = await apiFetch(`http://localhost:8080/templates/${tpl.id}/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ job_id: selectedJobId }),
@@ -368,7 +369,7 @@ export default function Requirements() {
     if (!window.confirm(`确定删除模板「${tpl.name}」吗？此操作不可恢复。`)) return
     setDeletingTplId(tpl.id)
     try {
-      const res = await fetch(`http://localhost:8000/templates/${tpl.id}`, { method: 'DELETE' })
+      const res = await apiFetch(`http://localhost:8080/templates/${tpl.id}`, { method: 'DELETE' })
       const json = await res.json()
       if (!res.ok || json.code !== 0) throw new Error(json.message || '删除失败')
       setSelectedTplId(null)
@@ -386,7 +387,7 @@ export default function Requirements() {
     if (!name) { showToast('请先填写模板名称'); return }
     if (!requirements.length) { showToast('当前无要求项，无法保存模板'); return }
     try {
-      const res = await fetch('http://localhost:8000/templates', {
+      const res = await apiFetch('http://localhost:8080/templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

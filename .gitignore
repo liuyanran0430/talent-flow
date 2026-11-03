@@ -1,2 +1,59 @@
-/.env
-.idea
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+.env
+
+# ===== Node / Frontend =====
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+.next/
+.nuxt/
+
+# ===== IDE / OS =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.vscode/
+
+# ===== Backend artifacts =====
+talent-flow-backend/logs/
+talent-flow-backend/uploads/
+talent-flow-backend/*.db
+talent-flow-backend/*.sqlite3
+talent-flow-backend/*.sqlite
+talent-flow-backend/.pytest_cache/
+talent-flow-backend/.mypy_cache/
+talent-flow-backend/_test_ocr/
+
+# ===== Test / Coverage =====
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# ===== Playwright =====
+talent-flow-web/.playwright-browsers/
+talent-flow-web/test-results/
+talent-flow-web/playwright-report/
+talent-flow-web/playwright/.cache/
+talent-flow-web/playwright/.auth/
+talent-flow-web/.env
+
+# ===== Course demo scripts (不属于工程本体) =====
+deepseek_api.py
+dify_client.py
+langchain.py
+RAG.py

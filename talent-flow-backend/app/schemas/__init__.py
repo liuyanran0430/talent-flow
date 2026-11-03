@@ -7,6 +7,7 @@ from .requirement import (
     RequirementItemOut,
     RequirementItemUpdate,
 )
+from .resume import ParseRequest, ParseResult
 from .template import (
     ApplyTemplateRequest,
     RequirementTemplateCreate,

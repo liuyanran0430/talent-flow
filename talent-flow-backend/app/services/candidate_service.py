@@ -1,14 +1,17 @@
-from sqlalchemy import func, select, text
-from sqlalchemy.orm import Session, joinedload
+﻿import os
+from datetime import datetime
 
-import os
+from sqlalchemy.orm import Session
 
+from ..core.logging_config import get_logger
 from ..models import Candidate, ResumeInfo
-from ..models.jobfit import JobFit
+from ..repositories import CandidateRepository, JobFitRepository, ResumeRepository
 from ..schemas.candidate import CandidateCreate, CandidateOut, CandidateUpdate
 
 # 简历侧字段（物理上在 resume_infos 表）：更新时路由到 resume，而非 candidates
 _RESUME_FIELDS = {"job_id", "experience", "info", "resume_path", "resume_hash", "analysis", "review_note"}
+
+logger = get_logger("candidate_service")
 
 
 class CandidateNotFoundError(Exception):
@@ -17,7 +20,9 @@ class CandidateNotFoundError(Exception):
 
 class CandidateService:
     def __init__(self, db: Session) -> None:
-        self.db = db
+        self.repo = CandidateRepository(db)
+        self.resume_repo = ResumeRepository(db)
+        self.jobfit_repo = JobFitRepository(db)
 
     def _get_or_create_resume(self, c: Candidate) -> ResumeInfo:
         if c.resume is None:
@@ -33,22 +38,13 @@ class CandidateService:
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[CandidateOut], int]:
-        stmt = select(Candidate).options(joinedload(Candidate.resume)).order_by(Candidate.created_at.desc())
-        if search:
-            like = f"%{search}%"
-            stmt = stmt.where(Candidate.name.like(like))
-        if status and status != "all":
-            stmt = stmt.where(Candidate.status == status)
-        if job_id:
-            # job_id 已迁移到简历表，需 join 过滤
-            stmt = stmt.join(ResumeInfo, ResumeInfo.candidate_id == Candidate.id).where(ResumeInfo.job_id == job_id)
-
-        total = self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-        items = self.db.execute(stmt.offset((page - 1) * page_size).limit(page_size)).unique().scalars().all()
-        return [CandidateOut.model_validate(c) for c in items], int(total)
+        items, total = self.repo.list(
+            search=search, status=status, job_id=job_id, page=page, page_size=page_size
+        )
+        return [CandidateOut.model_validate(c) for c in items], total
 
     def get_candidate(self, candidate_id: int) -> CandidateOut:
-        c = self.db.get(Candidate, candidate_id)
+        c = self.repo.get(candidate_id)
         if not c:
             raise CandidateNotFoundError(f"candidate {candidate_id} not found")
         return CandidateOut.model_validate(c)
@@ -60,13 +56,13 @@ class CandidateService:
         # 只要带了任一简历侧字段，就同时建简历行（一对一）
         if any(v is not None for v in resume_fields.values()):
             c.resume = ResumeInfo(**resume_fields)
-        self.db.add(c)
-        self.db.commit()
-        self.db.refresh(c)
+        self.repo.add(c)
+        self.repo.commit()
+        self.repo.refresh(c)
         return c
 
     def update_candidate(self, candidate_id: int, payload: CandidateUpdate) -> Candidate:
-        c = self.db.get(Candidate, candidate_id)
+        c = self.repo.get(candidate_id)
         if not c:
             raise CandidateNotFoundError(f"candidate {candidate_id} not found")
         resume = None
@@ -76,41 +72,53 @@ class CandidateService:
                 setattr(resume, k, v)
             else:
                 setattr(c, k, v)
-        self.db.commit()
-        self.db.refresh(c)
+        self.repo.commit()
+        self.repo.refresh(c)
         return c
 
     def delete_candidate(self, candidate_id: int) -> None:
-        c = self.db.get(Candidate, candidate_id)
+        c = self.repo.get(candidate_id)
         if not c:
             raise CandidateNotFoundError(f"candidate {candidate_id} not found")
         # 级联清理匹配建议与简历文件（resume 行由 cascade 一并删除）
-        self.db.query(JobFit).filter(JobFit.candidate_id == candidate_id).delete()
+        self.jobfit_repo.delete_by_candidate(candidate_id)
         resume_path = c.resume.resume_path if c.resume else None
-        self.db.delete(c)
-        self.db.commit()
+        self.repo.delete(c)
+        self.repo.commit()
         if resume_path:
             try:
                 os.remove(resume_path)
             except OSError:
                 pass  # 文件不存在或无法删除时忽略，避免影响记录删除
 
+    def find_by_resume_hash(self, resume_hash: str) -> ResumeInfo | None:
+        """简历内容哈希查重，命中返回已存在的简历行（含 candidate_id / job_id）。"""
+        return self.resume_repo.find_by_hash(resume_hash)
+
+    def mark_parsing(self, candidate_id: int) -> tuple[Candidate, bool]:
+        """标记候选人进入解析中，返回 (候选人, 是否放行)。
+
+        僵死自愈：status=processing 且 3 分钟内未完成（服务重载/进程被杀导致后台任务丢失），
+        放行重新触发；未超时不放行（already parsing）。
+        """
+        c = self.repo.get(candidate_id)
+        if not c:
+            raise CandidateNotFoundError(f"candidate {candidate_id} not found")
+        if c.status == "processing":
+            elapsed = (datetime.now() - c.updated_at).total_seconds()
+            if elapsed < 180:
+                return c, False
+            logger.warning("僵死自愈放行重新解析 candidate_id=%s 卡顿时长=%.0fs", candidate_id, elapsed)
+        c.status = "processing"
+        if c.resume:
+            c.resume.info = "正在解析简历"
+        self.repo.commit()
+        return c, True
+
     def stats_summary(self) -> dict:
-        total = self.db.scalar(select(func.count()).select_from(Candidate)) or 0
-        recommended = self.db.scalar(
-            select(func.count()).select_from(Candidate).where(Candidate.status == "recommended")
-        ) or 0
-        active_7d = self.db.scalar(
-            select(func.count())
-            .select_from(Candidate)
-            .where(Candidate.updated_at >= func.date_sub(func.now(), text("7 DAY")))
-        ) or 0
-        pending = self.db.scalar(
-            select(func.count()).select_from(Candidate).where(Candidate.status.in_(["review", "recommended"]))
-        ) or 0
         return {
-            "total": int(total),
-            "recommended": int(recommended),
-            "active_7d": int(active_7d),
-            "pending": int(pending),
+            "total": self.repo.count_all(),
+            "recommended": self.repo.count_by_statuses(["recommended"]),
+            "active_7d": self.repo.count_active_7d(),
+            "pending": self.repo.count_by_statuses(["review", "recommended"]),
         }

@@ -3,8 +3,7 @@ import Icon from '../components/Icon'
 import Modal, { ModalHeader } from '../components/Modal'
 import { useApp } from '../context/AppContext'
 import { upsertCandidateMatch, updateAlgoSettings, ALGO_SETTINGS } from '../utils/matchScore'
-
-const API_BASE = 'http://localhost:8000'
+import { API_BASE, apiFetch } from '../utils/api'
 
 const PAGE_SIZE = 10 // 候选人匹配概览每页条数
 
@@ -48,7 +47,7 @@ function buildConclusions(chips) {
 
 // 拉取全部部门
 async function fetchDepartments() {
-  const res = await fetch(`${API_BASE}/departments`)
+  const res = await apiFetch(`${API_BASE}/departments`)
   const json = await res.json()
   if (!res.ok || json.code !== 0) throw new Error(json.message || '部门查询失败')
   return json.data || []
@@ -56,7 +55,7 @@ async function fetchDepartments() {
 
 // 拉取招聘中的职位
 async function fetchJobs() {
-  const res = await fetch(`${API_BASE}/jobs`)
+  const res = await apiFetch(`${API_BASE}/jobs`)
   const json = await res.json()
   if (!res.ok || json.code !== 0) throw new Error(json.message || '职位查询失败')
   return (json.data || []).filter((j) => j.status === 'open')
@@ -64,7 +63,7 @@ async function fetchJobs() {
 
 // 拉取 review / finish 状态候选人（已解析未确认 + 已确认）
 async function fetchCandidates() {
-  const res = await fetch(`${API_BASE}/candidates?status=all&page_size=100`)
+  const res = await apiFetch(`${API_BASE}/candidates?status=all&page_size=100`)
   const json = await res.json()
   if (!res.ok || json.code !== 0) throw new Error(json.message || '候选人查询失败')
   return (json.data?.items || []).filter((c) => c.status === 'review' || c.status === 'finish')
@@ -72,7 +71,7 @@ async function fetchCandidates() {
 
 // 拉取某候选人的岗位匹配打分（matches）
 async function fetchMatches(candidateId) {
-  const res = await fetch(`${API_BASE}/matches/candidates/${candidateId}`)
+  const res = await apiFetch(`${API_BASE}/matches/candidates/${candidateId}`)
   const json = await res.json()
   if (!res.ok || json.code !== 0) throw new Error(json.message || '打分查询失败')
   return json.data || []
@@ -81,8 +80,8 @@ async function fetchMatches(candidateId) {
 // 拉取某候选人的职位匹配建议（含要求项名称、类型与建议，用于技能标签与维度分析）
 async function fetchFitChips(candidateId, jobId) {
   const [fitRes, reqRes] = await Promise.all([
-    fetch(`${API_BASE}/jobfits/candidates/${candidateId}`),
-    jobId ? fetch(`${API_BASE}/requirements/${jobId}/items`) : Promise.resolve(null),
+    apiFetch(`${API_BASE}/jobfits/candidates/${candidateId}`),
+    jobId ? apiFetch(`${API_BASE}/requirements/${jobId}/items`) : Promise.resolve(null),
   ])
   const fitJson = await fitRes.json()
   const reqJson = reqRes ? await reqRes.json() : null

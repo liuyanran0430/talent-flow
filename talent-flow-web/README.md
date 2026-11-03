@@ -3,7 +3,7 @@
 基于 React 18 + Vite 5 + Tailwind CSS 的智能招聘中台前端，配合 [talent-flow-backend](../talent-flow-backend) 使用，覆盖「职位 → 要求 → 简历导入 → 候选人 → 匹配看板」的完整招聘配置流程。
 
 - 技术栈：React 18、Vite 5、Tailwind CSS 3、@iconify/react
-- 后端 API 地址：`http://localhost:8000`（硬编码在各页面中，启动前请先启动后端）
+- 后端 API 地址：`http://localhost:8080`（硬编码在各页面中，启动前请先启动后端）
 
 ---
 
@@ -23,12 +23,14 @@
 - 会话 id 保存在 `sessionStorage` 的 `talent-flow-session-id`，同一标签页会话内稳定，可通过 `logger.sessionId` 或 `window.__TALENT_SESSION_ID__` 查看；
 - 页面切换会记录 `nav` info 日志（仅控制台，不上报），当前页面同步到 `window.__TALENT_SECTION__`；
 - `warn`/`error` 日志（含全局未捕获异常、未处理 Promise 拒绝、错误 Toast）自动上报后端，`keepalive` 保证页面卸载时尽力发出；
-- 后端每个响应都带 `X-Request-ID`（已配置 CORS `expose_headers`，前端 JS 可读取），也可在浏览器 Network 面板查看；排障时用该 rid 在后端 `logs/business.log` / `logs/app.log` 检索同一请求的全部日志；
+- 一次用户操作（点击/回车/表单提交）生成一个 `trace_id`（`src/utils/trace.js`），所有接口经 `src/utils/api.js` 的 `apiFetch` 自动带上 `X-Trace-ID` 请求头；
+- 后端每个响应都回传 `X-Trace-ID`（CORS 已配置 `expose_headers`，前端 JS 可读取），最近一次请求的 id 保存在 `window.__LAST_TRACE_ID__`，也可在浏览器 Network 面板查看；
+- 排障时用该 `trace_id` 在后端 `logs/app-YYYY-MM-DD.log` 检索同一操作的全部日志；前端 warn/error 上报也会携带 `trace_id`，与后端日志自动对齐；
 - 前端日志在后端按 `session_id` 串联，可还原同一用户会话的操作路径。
 
 ### 匹配得分算法
 
-代码位置：[matchScore.js](file:///e:/AI全栈/workspace/talent-flow/talent-flow/src/utils/matchScore.js)
+代码位置：[matchScore.js](file:///e:/AI全栈/workspace/talent-flow/talent-flow-web/src/utils/matchScore.js)
 
 1. 单项得分：满足 = 1，证据不足 = 0.5，不满足 = 0
 2. 基础分 = 100 × Σ(权重 × 单项得分) / Σ权重，仅统计「必须」项，权重按重要程度（默认 高 45 / 中 35 / 低 20）
@@ -42,33 +44,35 @@
 ## 二、项目目录
 
 ```
-talent-flow/
-├── index.html               # 入口 HTML（含 Tailwind 基础类）
+talent-flow-web/
+├── index.html               # 入口 HTML
 ├── package.json             # 依赖与脚本
-├── vite.config.js           # Vite 配置（端口 5173，自动打开浏览器）
+├── vite.config.js           # Vite 配置（端口 3000）
 ├── tailwind.config.js       # Tailwind 扫描范围
 ├── postcss.config.js        # Tailwind + autoprefixer
 ├── src/
 │   ├── main.jsx             # React 挂载入口，初始化全局异常捕获
-│   ├── App.jsx              # 应用外壳与页面切换（无路由，由 Context 控制）
+│   ├── App.jsx              # 应用外壳 + 侧栏抽屉 + 移动顶栏 + 页面切换
 │   ├── index.css            # 全局样式（Tailwind 指令）
 │   ├── components/
-│   │   ├── Sidebar.jsx      # 左侧导航
-│   │   ├── Header.jsx       # 顶部面包屑与用户区
-│   │   ├── Modal.jsx        # 通用弹窗
-│   │   └── Icon.jsx         # Iconify 图标封装
+│   │   ├── Sidebar.jsx      # 左侧导航（桌面静态 + 移动端抽屉，navigate 自动收起）
+│   │   ├── Header.jsx       # 桌面顶部面包屑与用户区（md 断点以上显示）
+│   │   ├── MobileHeader.jsx # 移动端顶栏（md 断点以下显示，含汉堡按钮）
+│   │   ├── Modal.jsx        # 通用弹窗（移动端全屏、桌面居中）
+│   │   ├── Icon.jsx         # Iconify 图标封装
+│   │   └── CandidateBlocks.jsx  # 候选人公共展示组件（JobfitTable + AiAnalysisBlock）
 │   ├── context/
-│   │   └── AppContext.jsx   # 全局状态：当前页面、Toast、导入队列等
+│   │   └── AppContext.jsx   # 全局状态：当前页面、Toast、导入队列、抽屉开关、navigate
 │   ├── pages/
-│   │   ├── Jobs.jsx         # 职位管理
-│   │   ├── Requirements.jsx # 职位要求配置
-│   │   ├── ImportResume.jsx # 导入简历
-│   │   ├── Candidates.jsx   # 候选人管理
-│   │   └── Report.jsx       # 职位匹配看板
+│   │   ├── Jobs.jsx         # 职位管理（表格 + 移动端卡片列表）
+│   │   ├── Requirements.jsx # 职位要求配置（含 AI 一键生成 + JD 重算）
+│   │   ├── ImportResume.jsx # 导入简历（队列 + 预览 + 候选人编辑弹框）
+│   │   ├── Candidates.jsx   # 候选人管理（卡片列表 + 详情/编辑弹框）
+│   │   └── Report.jsx       # 职位匹配看板（候选概览 + 维度分析侧栏）
 │   └── utils/
-│       ├── matchScore.js    # 匹配得分算法与打分 upsert
-│       └── logger.js        # 分级日志、会话 id、缓冲与后端上报
-└── dist/                    # npm run build 产物（可重新生成）
+│       ├── matchScore.js    # 匹配得分算法 + 分数 upsert（持久化 localStorage）
+│       └── logger.js        # 分级日志 + 会话 id + 环形缓冲 + 后端 /logs/frontend 上报
+└── dist/                    # npm run build 产物（可重新生成，gitignore）
 ```
 
 ---
@@ -101,7 +105,7 @@ talent-flow/
 ### 1. 安装依赖
 
 ```bash
-cd talent-flow
+cd talent-flow-web
 npm install
 ```
 
@@ -109,7 +113,7 @@ npm install
 
 ### 2. 先启动后端
 
-前端所有请求都指向 `http://localhost:8000`，请先按 [后端 README](../talent-flow-backend/README.md) 启动 API 服务，否则页面会提示「加载失败」。
+前端所有请求都指向 `http://localhost:8080`，请先按 [后端 README](../talent-flow-backend/README.md) 启动 API 服务，否则页面会提示「加载失败」。
 
 ### 3. 启动开发服务器
 
@@ -117,9 +121,9 @@ npm install
 npm run dev
 ```
 
-- 默认地址：`http://localhost:5173`
+- 默认地址：`http://localhost:3000`
 - `vite.config.js` 中 `server.open: true`，启动后会自动打开浏览器
-- 端口被占用时修改 [vite.config.js](file:///e:/AI全栈/workspace/talent-flow/talent-flow/vite.config.js) 的 `server.port`；若改动端口，请同步后端 `.env` 的 `FRONTEND_ORIGIN`（CORS 白名单）
+- 端口被占用时修改 [vite.config.js](file:///e:/AI全栈/workspace/talent-flow/talent-flow-web/vite.config.js) 的 `server.port`；若改动端口，请同步后端 `.env` 的 `FRONTEND_ORIGIN`（CORS 白名单）
 
 ### 4. 生产构建与预览
 
@@ -128,11 +132,11 @@ npm run build     # 产物输出到 dist/
 npm run preview   # 本地预览构建产物，默认 http://localhost:4173
 ```
 
-部署 `dist/` 到静态服务器时，需保证该页面能访问到后端 `http://localhost:8000`。
+部署 `dist/` 到静态服务器时，需保证该页面能访问到后端 `http://localhost:8080`。
 
 ### 快速验证
 
-1. 打开 `http://localhost:5173`，左侧出现 5 个菜单且无报错；
+1. 打开 `http://localhost:3000`，左侧出现 5 个菜单且无报错；
 2. 进入「职位管理」，列表能加载（说明后端 `/jobs` 正常）；
 3. 进入「导入简历」，可上传 PDF 并观察解析状态。
 
@@ -151,7 +155,7 @@ npm run preview   # 本地预览构建产物，默认 http://localhost:4173
 - `/matches/candidates/{candidate_id}`、`/matches`
 - `/logs/frontend`
 
-> API 基址硬编码为 `http://localhost:8000`（部分页面使用 `const API_BASE`，部分直接写完整 URL）。若后端端口变化，需要同时修改 `src/pages/` 下的 5 个页面与 `src/utils/logger.js`、`src/utils/matchScore.js`，共 7 个文件。
+> API 基址硬编码为 `http://localhost:8080`（部分页面使用 `const API_BASE`，部分直接写完整 URL）。若后端端口变化，需要同时修改 `src/pages/` 下的 5 个页面与 `src/utils/logger.js`、`src/utils/matchScore.js`，共 7 个文件。
 
 ---
 
@@ -159,8 +163,8 @@ npm run preview   # 本地预览构建产物，默认 http://localhost:4173
 
 | 现象 | 排查方向 |
 | --- | --- |
-| 页面数据为空、Toast 提示「加载失败」 | 后端未启动或端口不是 8000；浏览器控制台查看 CORS 报错，确认后端 `FRONTEND_ORIGIN` 与前端地址一致 |
+| 页面数据为空、Toast 提示「加载失败」 | 后端未启动或端口不是 8080；浏览器控制台查看 CORS 报错，确认后端 `FRONTEND_ORIGIN` 与前端地址一致 |
 | 图标不显示 | `@iconify/react` 需要访问 Iconify CDN，检查网络/代理 |
 | 简历上传失败（400） | 仅支持 pdf/doc/docx，文件不能为空且 ≤ 20MB；重复简历会返回 `message=duplicate` |
-| 解析一直停留在「解析中」 | 后端 LLM 未配置或调用超时；后端超过 3 分钟会自动允许重新解析，也可重试「开始分析」；用响应头 `X-Request-ID` 在 `logs/business.log` 按 rid 查看解析进度 |
+| 解析一直停留在「解析中」 | 后端 LLM 未配置或调用超时；后端超过 3 分钟会自动允许重新解析，也可重试「开始分析」；用响应头 `X-Trace-ID` 在 `logs/app-YYYY-MM-DD.log` 按 `trace_id` 查看解析进度 |
 | 端口冲突 | 修改 `vite.config.js` 的 `server.port`，并同步后端 `FRONTEND_ORIGIN` |

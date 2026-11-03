@@ -1,7 +1,9 @@
 // 前端分级日志工具：控制台输出 + 内存环形缓冲（window.__TALENT_LOGS__ 可查）
-// warn/error 自动上报后端 POST /logs/frontend 落盘；携带 session_id/页面/URL/UA，
-// 与后端日志中的 rid 一起用于全流程追溯（同一会话的操作可在日志中串联）。
-const API_BASE = 'http://localhost:8000'
+// warn/error 自动上报后端 POST /logs/frontend 落盘；携带 session_id/trace_id/页面/URL/UA，
+// 与后端日志中的 trace_id 一起用于全流程追溯（同一操作可在日志中串联）。
+import { API_BASE, apiFetch } from './api'
+import { getActiveTraceId, getLastTraceId } from './trace'
+
 const MAX_BUFFER = 200
 const SESSION_KEY = 'talent-flow-session-id'
 const buffer = []
@@ -57,10 +59,11 @@ function report(level, tag, message, stack) {
     page: currentSection(),
     stack,
     session_id: SESSION_ID,
+    trace_id: getLastTraceId() || getActiveTraceId(),
     url: typeof location !== 'undefined' ? location.href : null,
     user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
   }
-  fetch(`${API_BASE}/logs/frontend`, {
+  apiFetch(`${API_BASE}/logs/frontend`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

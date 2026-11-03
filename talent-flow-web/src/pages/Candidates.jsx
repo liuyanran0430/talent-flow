@@ -3,15 +3,14 @@ import Icon from '../components/Icon'
 import Modal, { ModalHeader } from '../components/Modal'
 import { useApp } from '../context/AppContext'
 import { upsertCandidateMatch, ALGO_SETTINGS } from '../utils/matchScore'
+import { API_BASE, apiFetch } from '../utils/api'
 import { JobfitTable, AiAnalysisBlock } from '../components/CandidateBlocks'
-
-const API_BASE = 'http://localhost:8000'
 
 const PAGE_SIZE = 10 // 候选人列表每页条数
 
 // 拉取全部职位（id → name 映射，用于意向职位展示与筛选）
 async function fetchJobs() {
-  const res = await fetch(`${API_BASE}/jobs`)
+  const res = await apiFetch(`${API_BASE}/jobs`)
   const json = await res.json()
   if (!res.ok || json.code !== 0) throw new Error(json.message || '职位查询失败')
   return json.data || []
@@ -19,7 +18,7 @@ async function fetchJobs() {
 
 // 拉取 review / finish 状态候选人（已解析未确认 + 已确认）
 async function fetchCandidates() {
-  const res = await fetch(`${API_BASE}/candidates?status=all&page_size=500`)
+  const res = await apiFetch(`${API_BASE}/candidates?status=all&page_size=500`)
   const json = await res.json()
   if (!res.ok || json.code !== 0) throw new Error(json.message || '候选人查询失败')
   return (json.data?.items || []).filter((c) => c.status === 'review' || c.status === 'finish')
@@ -28,9 +27,9 @@ async function fetchCandidates() {
 // 拉取某候选人的职位匹配建议（jobfits），按所属职位要求项补齐名称
 async function fetchJobfits(candidate, jobIdMap) {
   const [fitRes, reqRes] = await Promise.all([
-    fetch(`${API_BASE}/jobfits/candidates/${candidate.id}`),
+    apiFetch(`${API_BASE}/jobfits/candidates/${candidate.id}`),
     candidate.job_id
-      ? fetch(`${API_BASE}/requirements/${candidate.job_id}/items`)
+      ? apiFetch(`${API_BASE}/requirements/${candidate.job_id}/items`)
       : Promise.resolve(null),
   ])
   const fitJson = await fitRes.json()
@@ -41,7 +40,7 @@ async function fetchJobfits(candidate, jobIdMap) {
 
 // 拉取某候选人的岗位匹配打分（matches）
 async function fetchMatches(candidateId) {
-  const res = await fetch(`${API_BASE}/matches/candidates/${candidateId}`)
+  const res = await apiFetch(`${API_BASE}/matches/candidates/${candidateId}`)
   const json = await res.json()
   if (!res.ok || json.code !== 0) throw new Error(json.message || '打分查询失败')
   return json.data || []
@@ -199,7 +198,7 @@ export default function Candidates() {
     if (changed.length === 0) return
     await Promise.all(
       changed.map(async (f) => {
-        const res = await fetch(`${API_BASE}/jobfits/${f.id}`, {
+        const res = await apiFetch(`${API_BASE}/jobfits/${f.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ suggestion: f.suggestion, evidence: f.evidence || '' }),
@@ -251,7 +250,7 @@ export default function Candidates() {
     try {
       if (mode === 'edit_adopt') {
         // 先保存基础信息 + 复核意见
-        const res = await fetch(`${API_BASE}/candidates/${c.id}`, {
+        const res = await apiFetch(`${API_BASE}/candidates/${c.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -269,7 +268,7 @@ export default function Candidates() {
         await saveFits()
       }
       // 确认：状态置为 finish；「采纳」模式下复核意见随本次请求一并提交（单次 PUT，避免两次请求间的覆盖）
-      const res = await fetch(`${API_BASE}/candidates/${c.id}`, {
+      const res = await apiFetch(`${API_BASE}/candidates/${c.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -302,7 +301,7 @@ export default function Candidates() {
   const deleteCandidate = async (c) => {
     if (!window.confirm(`确定要删除候选人「${c.name || '未命名'}」吗？此操作不可恢复。`)) return
     try {
-      const res = await fetch(`${API_BASE}/candidates/${c.id}`, { method: 'DELETE' })
+      const res = await apiFetch(`${API_BASE}/candidates/${c.id}`, { method: 'DELETE' })
       const json = await res.json()
       if (!res.ok || json.code !== 0) throw new Error(json.message || '删除失败')
       setCandidates((list) => list.filter((x) => x.id !== c.id))

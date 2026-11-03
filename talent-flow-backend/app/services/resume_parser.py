@@ -1,4 +1,4 @@
-"""
+﻿"""
 简历解析服务
 
 输入：简历本地路径、职位要求项及判定标准的列表
@@ -24,15 +24,13 @@ import zipfile
 from html import unescape
 from typing import List, Literal
 
-import dotenv
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-dotenv.load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
+from ..core.config import settings
+from ..llm import get_model_client
 
 # 简历文本截断上限，避免超出 LLM 上下文
 MAX_RESUME_CHARS = 8000
@@ -58,10 +56,11 @@ class MatchSuggestion(BaseModel):
 
 class AnalysisPoint(BaseModel):
     """优势/风险条目：point 是结论，evidence 必须引用简历原文关键内容。
-    业务层强制约束：evidence 为空或太短的优势条目会被过滤掉，不写入最终结果。"""
+    业务层强制约束：evidence 为空或太短的优势条目会被过滤掉，不写入最终结果。
+    evidence 不做 min_length 校验：LLM 返回空证据时不应让整个解析失败，交由 _validate 过滤。"""
 
     point: str = Field(..., max_length=100, description="结论要点，如 '5 年 Python 后端经验'")
-    evidence: str = Field(..., min_length=1, max_length=200, description="证据，直接引用简历原文；必须有具体内容才能保留该条目")
+    evidence: str = Field("", max_length=200, description="证据，直接引用简历原文；为空的优势在 _validate 中被剔除")
 
 
 class ResumeParseResult(BaseModel):
@@ -73,12 +72,9 @@ class ResumeParseResult(BaseModel):
     risks: List[AnalysisPoint] = Field(default_factory=list, description="需要关注的风险/短板（带证据）")
 
 
-# ---------- OCR 兜底阈值 ----------
-# pypdf 从扫描版 PDF 抽不到文字时，通常返回空串或极少垃圾字符；
-# 低于该阈值即判定为扫描件，触发 OCR。可在 .env 中通过 OCR_MIN_CHARS 覆盖。
-OCR_MIN_CHARS = int(os.getenv("OCR_MIN_CHARS", "50"))
-# 是否对所有 PDF 都尝试 OCR 兜底（默认 True）
-OCR_ENABLED = os.getenv("OCR_ENABLED", "true").lower() in ("1", "true", "yes")
+# ---------- OCR 兜底阈值（配置统一走 config.settings，可在 .env 覆盖） ----------
+OCR_MIN_CHARS = settings.OCR_MIN_CHARS
+OCR_ENABLED = settings.OCR_ENABLED
 
 
 def _extract_pdf_text(path: str) -> str:
@@ -202,17 +198,6 @@ classify_prompt = ChatPromptTemplate.from_messages(
 ).partial(format_instructions=parser.get_format_instructions())
 
 
-def build_llm() -> ChatOpenAI:
-    return ChatOpenAI(
-        model=os.getenv("LLM_MODEL", "deepseek-v4-pro"),
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_API_BASE"),
-        temperature=0.2,
-        timeout=120,  # 超时防止 API 挂起导致解析状态永远停在 processing
-        max_retries=2,
-    )
-
-
 # ---------- 步骤 3：输出校验 ----------
 # 优势 evidence 最小长度：短于此值视为"没有证据"，该优势必须被过滤掉
 # 风险 evidence 放宽（可能简历未明确提及某风险，但仍保留条目提醒 HR 核实）
@@ -258,7 +243,7 @@ def _validate(result: ResumeParseResult, requirement_names: List[str]) -> str:
 # ---------- 编排 chain ----------
 def build_chain(requirement_names: List[str]):
     """构建 LCEL chain：preprocess → classify_prompt → llm → parser → validate"""
-    llm = build_llm()
+    llm = get_model_client().chat_model
     return (
         RunnableLambda(preprocess)
         | classify_prompt

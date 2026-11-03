@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Icon from '../components/Icon'
 import Modal, { ModalHeader } from '../components/Modal'
 import { useApp } from '../context/AppContext'
+import { apiFetch } from '../utils/api'
 
 const STATUS_MAP = {
   open: { label: '招聘中', badge: 'bg-emerald-50 text-emerald-700', iconBg: 'bg-cyan-50 text-cyan-700' },
@@ -35,7 +36,7 @@ export default function Jobs() {
 
   const fetchJobs = async () => {
     try {
-      const res = await fetch('http://localhost:8000/jobs')
+      const res = await apiFetch('http://localhost:8080/jobs')
       const json = await res.json()
       if (!res.ok || json.code !== 0) throw new Error(json.message || '加载失败')
       setJobs(json.data || [])
@@ -113,7 +114,7 @@ export default function Jobs() {
     }
     const isEdit = !!formJobId
     try {
-      const res = await fetch(isEdit ? `http://localhost:8000/jobs/${formJobId}` : 'http://localhost:8000/jobs', {
+      const res = await apiFetch(isEdit ? `http://localhost:8080/jobs/${formJobId}` : 'http://localhost:8080/jobs', {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -136,7 +137,7 @@ export default function Jobs() {
 
   const fetchDepartments = async () => {
     try {
-      const res = await fetch('http://localhost:8000/departments')
+      const res = await apiFetch('http://localhost:8080/departments')
       const json = await res.json()
       if (!res.ok || json.code !== 0) throw new Error(json.message || '加载失败')
       setDepartments(json.data || [])
@@ -168,7 +169,7 @@ export default function Jobs() {
 
   const deleteDepartment = async (id, name) => {
     try {
-      const res = await fetch(`http://localhost:8000/departments/${id}`, { method: 'DELETE' })
+      const res = await apiFetch(`http://localhost:8080/departments/${id}`, { method: 'DELETE' })
       const json = await res.json()
       if (!res.ok || json.code !== 0) throw new Error(json.message || '删除失败')
       showToast(`部门「${name}」已删除`)
@@ -185,9 +186,9 @@ export default function Jobs() {
     const isEdit = editingDeptId != null
     try {
       const url = isEdit
-        ? `http://localhost:8000/departments/${editingDeptId}`
-        : 'http://localhost:8000/departments'
-      const res = await fetch(url, {
+        ? `http://localhost:8080/departments/${editingDeptId}`
+        : 'http://localhost:8080/departments'
+      const res = await apiFetch(url, {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, responsibility: deptResponsibility.trim() || null }),

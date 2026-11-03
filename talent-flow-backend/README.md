@@ -20,7 +20,7 @@
 | 要求模板 | 模板与模板要求项 CRUD，可一键复制模板项到指定职位并累计使用次数 |
 | 匹配建议 / 匹配打分 | jobfits（逐项建议）与 matches（0-100 分及各计数项）的查询、新增、更新、删除 |
 | 统一响应 | 所有接口返回 `{ code, message, data }`，分页返回 `PageResponse` |
-| 日志与可观测性 | 业务日志 + 访问日志双文件轮转；接收前端 `warn/error` 日志落盘；`logs/app.log`、`logs/errors.log` |
+| 日志与可观测性 | 业务日志 + 访问日志统一写入 `logs/app-YYYY-MM-DD.log`（每天一个新文件）；接收前端 `warn/error` 日志落盘 |
 | OpenAPI | 路由按 tags 分组，提供 `openapi.yaml` 与一键导出脚本 |
 
 ### 匹配打分规则（与前端一致）
@@ -49,7 +49,7 @@ talent-flow-backend/
 ├── scripts/
 │   └── export_openapi.py    # 导出 openapi.yaml / openapi.json
 ├── uploads/                 # 简历上传目录（运行时自动创建，gitignore）
-├── logs/                    # app.log / errors.log（运行时自动创建，gitignore）
+├── logs/                    # app-YYYY-MM-DD.log（运行时按天自动创建，gitignore）
 ├── openapi.yaml             # 已导出的接口文档
 ├── requirements.txt         # Python 依赖
 ├── .env.example             # 环境变量模板
@@ -278,26 +278,27 @@ POST /resumes/{id}/analyze
 
 | 路径 | 说明 |
 | --- | --- |
-| `logs/app.log` | 全量应用日志（INFO 及以上），10MB 轮转，保留 5 份 |
-| `logs/errors.log` | ERROR 及以上日志（含异常堆栈），5MB 轮转，保留 5 份 |
-| `logs/business.log` | **业务关键事件流水**，10MB 轮转，保留 5 份 |
+| `logs/app-YYYY-MM-DD.log` | 全量应用日志（INFO 及以上，含业务流水、错误堆栈与访问日志），每天一个文件，跨天自动切换 |
 | `uploads/` | 简历文件，使用 UUID 文件名；数据库 `candidates.resume_path` 保存相对路径 |
 | `openapi.yaml` | 已导出的接口文档，可通过脚本重新生成 |
+
+不再单独生成 `errors.log` / `business.log` / `uvicorn.err.log`，所有日志统一写入当天文件。
 
 每条日志格式：
 
 ```
-2026-10-30 22:36:37 | INFO | rid=deef17b83b8c | app.audit.department | 部门创建 id=1 name=日志验证部门
+2026-11-03 22:36:37 | INFO    | trace_id=deef17b83b8c4a1f | task=- | app.audit.department | 部门创建 id=1 name=日志验证部门
 ```
 
-### trace id（rid）
+### trace id（trace_id）
 
-- 每个请求自动分配 12 位 trace id，写入日志上下文并注入所有日志行；
-- 响应头返回 `X-Request-ID`（CORS 已配置 `expose_headers`，前端 JS 可读取）；客户端也可在请求头传入 `X-Request-ID` 复用自定义链路 id；
-- 访问日志规则：所有写操作（POST/PUT/DELETE/PATCH）全量记录，GET 仅记录非 2xx 或耗时 > 500ms 的请求，避免轮询刷屏；
+- 前端一次用户操作（点击/回车/表单提交）生成一个 16 位 trace id，通过请求头 `X-Trace-ID` 传给后端；后端优先复用，缺失时自动生成；
+- trace id 写入日志上下文并注入所有日志行，响应头回传 `X-Trace-ID`（CORS 已配置 `expose_headers`，前端 JS 可读取）；同时兼容旧客户端传入的 `X-Request-ID`；
+- CORS 预检（OPTIONS）不分配 trace、不记录访问日志，避免刷屏；
+- 访问日志规则：所有写操作（POST/PUT/DELETE/PATCH）全量记录，GET 仅记录非 2xx 或耗时 > 500ms 的请求；
 - 访问日志包含方法、路径、状态码、客户端 IP 与耗时。
 
-### 关键业务事件（`business.log`）
+### 关键业务事件（`app.audit.*`，写入当天文件）
 
 | logger | 记录内容 |
 | --- | --- |
@@ -307,22 +308,22 @@ POST /resumes/{id}/analyze
 | `app.audit.candidate` | 候选人创建、更新（字段/状态）、删除 |
 | `app.audit.template` | 模板创建、应用到职位、删除 |
 | `app.audit.jobfit` / `app.audit.match` | 匹配建议、匹配打分的人工新增/更新/删除 |
-| `app.audit.frontend` | 前端上报的 warn/error（含 session_id、页面、URL、UA、堆栈） |
+| `app.audit.frontend` | 前端上报的 warn/error（含 session_id、trace_id、页面、URL、UA、堆栈） |
 
 ### 后台任务追溯
 
-简历解析与要求重算均为后台任务，日志额外携带 `task=<8位任务id>`：
+简历解析与要求重算均为后台任务，日志行额外携带 `task=<8位任务id>`：
 
-- 触发接口记录 `task` 与当前 `rid`；
-- 后台任务沿用触发请求的 `rid`（并写入独立 task id），因此同一次触发的前后台日志可用 `rid` 串联；
+- 触发接口记录当前 `trace_id`，并生成独立 `task_id`（日志字段 `task=`）；
+- 后台任务沿用触发请求的 `trace_id` 并绑定自己的 `task_id`，因此同一次操作的前后台日志可用 `trace_id` 串联，多个异步任务用 `task` 区分；
 - 解析进度：`简历解析触发 → 简历解析开始 → 简历解析完成/失败`，同时候选人状态从 `processing` 变为 `review`/`finish`。
 
 ### 排障路径
 
-1. 用户反馈问题时，从浏览器 Network 获取该请求的响应头 `X-Request-ID`；
-2. 在 `logs/business.log` / `logs/app.log` 中 `grep rid` 得到同一次请求的全部业务与访问日志；
-3. 若为前端报错，在 `logs/business.log` 中按 `session_id` 检索同一会话的前端日志与页面路径；
-4. 堆栈与未捕获异常在 `logs/errors.log` 中查看。
+1. 用户反馈问题时，从浏览器 Network 获取该请求的响应头 `X-Trace-ID`（前端调试期也可查看 `window.__LAST_TRACE_ID__`）；
+2. 在 `logs/app-YYYY-MM-DD.log` 中 `grep trace_id=<该id>` 得到同一次操作的全部业务、访问与错误日志；
+3. 若为前端报错，在同一文件中按 `session_id` 或 `trace_id` 检索同一操作的前端日志与页面路径；
+4. 异常堆栈同样记录在该文件中（`logger.exception` 会带完整堆栈）。
 
 重新导出 OpenAPI：
 

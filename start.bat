@@ -4,8 +4,8 @@ setlocal enabledelayedexpansion
 rem ============================================================
 rem  TalentFlow start script (Windows batch)
 rem  Usage: start.bat [start^|stop^|restart^|status^|help]
-rem    start   Start frontend(5173)+backend(8000), each in a window (default)
-rem    stop    Stop services on ports 5173/8000
+rem    start   Start frontend(3000)+backend(8080), each in a window (default)
+rem    stop    Stop services on ports 3000/8080
 rem    restart Stop then start
 rem    status  Show port usage
 rem    help    Show this help
@@ -27,7 +27,7 @@ if /i "%CMD%"=="help"    goto :help
 goto :help
 
 :start
-echo [START] Frontend Vite (5173) + Backend FastAPI (8000)
+echo [START] Frontend Vite (3000) + Backend FastAPI (8080)
 if not exist "%FRONTEND%\node_modules" (
   echo [Frontend] node_modules missing, running npm install ...
   pushd "%FRONTEND%" && call npm install && popd
@@ -38,15 +38,15 @@ if not exist "%PYEXE%" (
   exit /b 1
 )
 start "TalentFlow-Frontend" cmd /k "cd /d %FRONTEND% && npm run dev"
-start "TalentFlow-Backend"  cmd /k "cd /d %BACKEND% && .venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
-echo Started. Frontend http://localhost:5173 / Backend http://localhost:8000/docs
+start "TalentFlow-Backend"  cmd /k "cd /d %BACKEND% && .venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload"
+echo Started. Frontend http://localhost:3000 / Backend http://localhost:8080/docs
 echo Stop with: start.bat stop  or close the windows.
 goto :eof
 
 :stop
-echo [STOP] Closing services on 5173/8000 ...
-call :killport 5173
-call :killport 8000
+echo [STOP] Closing services on 3000/8080 ...
+call :killport 3000
+call :killport 8080
 goto :eof
 
 :restart
@@ -57,8 +57,8 @@ goto :eof
 
 :status
 echo [STATUS]
-call :portstatus 5173
-call :portstatus 8000
+call :portstatus 3000
+call :portstatus 8080
 goto :eof
 
 :help
