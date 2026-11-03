@@ -4,7 +4,7 @@ import { defineConfig, devices } from '@playwright/test'
  * TalentFlow 前端 E2E 测试配置
  *
  * 前置条件（二选一）：
- *   A. 已执行 `start.bat start` 同时启动 后端(8080) + 前端(3000)
+ *   A. 已执行 `start-all.bat` 同时启动 后端(8080) + 前端(3000)（另含 MySQL）
  *   B. 后端已在 8080 运行；Playwright 会自动用 `npm run dev:e2e` 起前端
  *
  * 后端接口使用真实数据库 + mock 混合策略：
