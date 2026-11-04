@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 rem ============================================================
 rem  TalentFlow stop-all.bat
-rem  Stop frontend (3000) and backend (8080). MySQL service is left running.
+rem  Stop frontend (3001) and backend (8080). MySQL service is left running.
 rem  Usage: double click, or run in cmd: stop-all.bat
 rem ============================================================
 
@@ -11,7 +11,7 @@ echo ============================================
 echo  TalentFlow - stop frontend and backend
 echo ============================================
 
-call :killport 3000
+call :killport 3001
 call :killport 8080
 
 echo.

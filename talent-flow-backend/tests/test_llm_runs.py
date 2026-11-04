@@ -5,6 +5,7 @@ import uuid
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
+from app.core.logging_config import reset_request_id, set_request_id
 from app.database import SessionLocal
 from app.llm.callback import LLMRunCallbackHandler
 from app.models import LLMRun
@@ -45,6 +46,7 @@ def test_success_run_recorded():
     assert row.total_tokens == 42
     assert row.status == "success"
     assert row.latency_ms >= 0
+    assert row.request_id is None  # 非异步任务上下文（如调试同步调用）没有 request_id
 
 
 def test_error_run_recorded():
@@ -58,3 +60,20 @@ def test_error_run_recorded():
     assert row.status == "error"
     assert row.total_tokens == 0
     assert "boom" in (row.error_message or "")
+
+
+def test_request_id_matches_async_task():
+    """后台任务中产生的模型调用，request_id 等于接口返回给前端的任务 id。"""
+    request_id = uuid.uuid4().hex
+    token = set_request_id(request_id)
+    try:
+        handler = LLMRunCallbackHandler()
+        run_id = uuid.uuid4()
+        handler.on_chat_model_start({"kwargs": {"model_name": "qwen-max"}}, [], run_id=run_id)
+        handler.on_llm_end(_response(5, 7), run_id=run_id)
+    finally:
+        reset_request_id(token)
+
+    with SessionLocal() as db:
+        row = db.query(LLMRun).one()
+    assert row.request_id == request_id

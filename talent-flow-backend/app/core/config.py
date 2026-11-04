@@ -20,17 +20,20 @@ class Settings(BaseSettings):
     # 生产留空走下面的 MySQL 拼装；本地验证可设为 sqlite:///./local.db
     DATABASE_URL: str | None = None
 
-    FRONTEND_ORIGIN: str = "http://localhost:3000"
+    FRONTEND_ORIGIN: str = "http://localhost:3001"
 
     # LLM（OpenAI 兼容）配置，供 app/llm 统一封装读取
     LLM_MODEL: str = "deepseek-v4-pro"
     OPENAI_API_KEY: str | None = None
     OPENAI_API_BASE: str | None = None
     LLM_TEMPERATURE: float = 0.2
-    LLM_TIMEOUT: int = 120  # 超时防止 API 挂起导致前端长时间等待 / 解析状态停在 processing
-    LLM_MAX_RETRIES: int = 2  # 可重试错误（超时/连接中断/429/5xx）的最大重试次数，总尝试次数 = 1 + 该值
+    LLM_TIMEOUT: int = 120  # 单次请求硬超时（秒）：防止 API 挂起导致前端长时间等待 / 解析状态停在 processing
+    LLM_MAX_TOKENS: int = 4000  # 单次输出 token 上限：配合输入截断，避免 prompt+输出超出模型上下文窗口
+    # 429 限流/超时/连接中断/5xx：指数退避重试，默认 1s/2s/4s（共 3 次重试）
+    LLM_MAX_RETRIES: int = 3  # 最大重试次数，总尝试次数 = 1 + 该值；退避序列 1s/2s/4s
     LLM_RETRY_INITIAL_WAIT: float = 1.0  # 首次重试前等待秒数
     LLM_RETRY_MAX_WAIT: float = 10.0  # 单次重试最长等待秒数
+    LLM_RETRY_JITTER: float = 0.0  # 退避随机抖动秒数；0 = 严格 1s/2s/4s，可调大避免并发惊群
 
     # OCR 兜底：pypdf 抽不到足够文本（扫描件）时触发
     OCR_ENABLED: bool = True

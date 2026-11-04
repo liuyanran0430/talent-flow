@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 rem ============================================================
 rem  TalentFlow start-all.bat
-rem  Start MySQL service + Backend FastAPI (8080) + Frontend Vite (3000)
+rem  Start MySQL service + Backend FastAPI (8080) + Frontend Vite (3001)
 rem  Usage: double click, or run in cmd: start-all.bat
 rem ============================================================
 
@@ -52,7 +52,7 @@ if not exist "%FRONTEND%\node_modules" (
   pushd "%FRONTEND%" && call npm install && popd
 )
 start "TalentFlow-Frontend" /D "%FRONTEND%" cmd /k "npm run dev"
-echo [Frontend] Started: http://localhost:3000
+echo [Frontend] Started: http://localhost:3001
 
 echo.
 echo All services started. Stop with stop-all.bat

@@ -1,21 +1,27 @@
-"""统一日志配置：trace id / task id 贯穿请求与后台任务，日志同时输出到控制台与按天文件。
+"""统一日志配置：request id 贯穿 LLM 请求与后台任务，日志同时输出到控制台与按天文件。
 
 文件说明：
-- logs/app-YYYY-MM-DD.log  全量日志（INFO 及以上），每天一个文件，跨天自动切换
-- 不再单独写 errors.log / business.log / uvicorn.err.log；错误堆栈、业务流水、访问日志统一进当天文件
+- logs/app-YYYY-MM-DD.log       后端全量日志（业务、访问、错误堆栈），每天一个文件，跨天自动切换
+- logs/frontend-YYYY-MM-DD.log  前端上报日志（浏览器 warn/error、未捕获异常），与后端日志分文件保存
+- logs/llm-YYYY-MM-DD.log       LLM 调用结构化日志（每行一个 JSON），用于排障与用量分析
 
 全流程追溯方式：
-- 前端一次用户操作生成一个 trace_id（X-Trace-ID 请求头），后端优先复用、缺失时自动生成，
-  日志行包含 `trace_id=xxxxxxxxxxxxxxxx`，响应头回传 X-Trace-ID；
-- 后台任务（简历解析、要求重算）沿用触发请求的 trace_id，并另行绑定 task_id 字段，便于区分同一操作内的多个异步任务；
-- 前端 warn/error 日志携带 session_id 与 trace_id，后端接收时一并落盘。
+- request_id 由 LLM 异步接口生成并返回给前端（同时落库 async_tasks），后台任务与模型调用共用该 id；
+- 只有调用 LLM 的接口会带 request_id，其余请求日志该字段为 `-`；
+- 前端 warn/error 日志携带 session_id 与 request_id，后端接收时一并落盘。
 
-日志格式：
-    时间 | 级别 | trace_id=xxx | task=xxx | logger | 消息
+日志格式（app / frontend）：
+    时间 | 级别 | request_id=xxx | logger | 消息
+
+LLM 结构化日志格式（llm，逐行 JSON）：
+    {"request_id": "...", "user_id": null, "session_id": "...", "model": "...",
+     "prompt_version": "...", "retrieval_ids": [], "tool_calls": [],
+     "latency_ms": 123, "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30,
+     "error_type": null, "status": "success"}
 """
+import json
 import logging
 import os
-import uuid
 from contextvars import ContextVar
 from datetime import date
 
@@ -23,61 +29,85 @@ from datetime import date
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 
-# 请求级 trace id：在 FastAPI 中间件中写入，日志 Filter 自动注入到每条日志
-trace_id_var: ContextVar[str] = ContextVar("trace_id", default="-")
-# 后台任务 id：在后台任务入口绑定，未绑定时为 "-"
-task_id_var: ContextVar[str] = ContextVar("task_id", default="-")
+# LLM 请求 id：异步任务入口绑定，等于接口返回给前端的 request_id；未绑定时为 "-"
+request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
+# 会话 id：前端通过 X-Session-ID 请求头传入
+session_id_var: ContextVar[str] = ContextVar("session_id", default="-")
+# 用户 id：当前系统无登录体系，默认 "-"（预留）
+user_id_var: ContextVar[str] = ContextVar("user_id", default="-")
+# Prompt 版本：由解析器在调用 LLM 前绑定，便于定位「当时用的是哪一版提示词」
+prompt_version_var: ContextVar[str] = ContextVar("prompt_version", default="-")
 
-LOG_FORMAT = "%(asctime)s | %(levelname)-7s | trace_id=%(trace_id)s | task=%(task_id)s | %(name)s | %(message)s"
+LOG_FORMAT = "%(asctime)s | %(levelname)-7s | request_id=%(request_id)s | %(name)s | %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-def new_trace_id() -> str:
-    """生成 trace id（16 位十六进制），便于人工检索"""
-    return uuid.uuid4().hex[:16]
+def _set(var: ContextVar, value: str | None):
+    return var.set(value or "-")
 
 
-def set_trace_id(trace_id: str):
-    """绑定当前上下文的 trace id，返回用于恢复的 token"""
-    return trace_id_var.set(trace_id or "-")
-
-
-def reset_trace_id(token) -> None:
-    """恢复上一个 trace id（请求结束后调用，避免上下文串号）"""
+def _reset(var: ContextVar, token) -> None:
     try:
-        trace_id_var.reset(token)
+        var.reset(token)
     except ValueError:
         pass
 
 
-def get_trace_id() -> str:
-    return trace_id_var.get()
+def set_request_id(request_id: str):
+    """绑定当前上下文的 request_id，返回用于恢复的 token"""
+    return _set(request_id_var, request_id)
 
 
-def set_task_id(task_id: str):
-    """绑定当前上下文的后台任务 id，返回用于恢复的 token"""
-    return task_id_var.set(task_id or "-")
+def reset_request_id(token) -> None:
+    _reset(request_id_var, token)
 
 
-def reset_task_id(token) -> None:
-    try:
-        task_id_var.reset(token)
-    except ValueError:
-        pass
+def get_request_id() -> str:
+    return request_id_var.get()
 
 
-def get_task_id() -> str:
-    return task_id_var.get()
+def set_session_id(session_id: str | None):
+    return _set(session_id_var, session_id)
+
+
+def reset_session_id(token) -> None:
+    _reset(session_id_var, token)
+
+
+def get_session_id() -> str:
+    return session_id_var.get()
+
+
+def set_user_id(user_id: str | None):
+    return _set(user_id_var, user_id)
+
+
+def reset_user_id(token) -> None:
+    _reset(user_id_var, token)
+
+
+def get_user_id() -> str:
+    return user_id_var.get()
+
+
+def set_prompt_version(prompt_version: str):
+    return _set(prompt_version_var, prompt_version)
+
+
+def reset_prompt_version(token) -> None:
+    _reset(prompt_version_var, token)
+
+
+def get_prompt_version() -> str:
+    return prompt_version_var.get()
 
 
 class ContextFilter(logging.Filter):
-    """把当前上下文的 trace id / task id 注入日志记录（不覆盖显式传入的值）"""
+    """把当前上下文的 request_id 注入日志记录（不覆盖显式传入的值）"""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if not getattr(record, "trace_id", None):
-            record.trace_id = trace_id_var.get()
-        if not getattr(record, "task_id", None):
-            record.task_id = task_id_var.get()
+        if not getattr(record, "request_id", None):
+            record.request_id = request_id_var.get()
         return True
 
 
@@ -89,12 +119,15 @@ def _make_formatter() -> logging.Formatter:
 
 
 class DailyFileHandler(logging.FileHandler):
-    """按天切换的日志文件：写入 logs/app-YYYY-MM-DD.log，跨天自动换新文件。"""
+    """按天切换的日志文件：写入 logs/<prefix>-YYYY-MM-DD.log，跨天自动换新文件。"""
 
-    def __init__(self, log_dir: str, level: int) -> None:
+    def __init__(self, log_dir: str, level: int, prefix: str = "app") -> None:
         self._log_dir = log_dir
+        self._prefix = prefix
         self._day = date.today().isoformat()
-        super().__init__(os.path.join(log_dir, f"app-{self._day}.log"), mode="a", encoding="utf-8")
+        super().__init__(
+            os.path.join(log_dir, f"{prefix}-{self._day}.log"), mode="a", encoding="utf-8"
+        )
         self.setLevel(level)
         self.setFormatter(_make_formatter())
         self.addFilter(_context_filter)
@@ -105,7 +138,9 @@ class DailyFileHandler(logging.FileHandler):
         day = date.today().isoformat()
         if day != self._day:
             self._day = day
-            self.baseFilename = os.path.abspath(os.path.join(self._log_dir, f"app-{day}.log"))
+            self.baseFilename = os.path.abspath(
+                os.path.join(self._log_dir, f"{self._prefix}-{day}.log")
+            )
             if self.stream:
                 self.stream.close()
                 self.stream = None
@@ -122,10 +157,11 @@ def _ensure_handlers(logger: logging.Logger, handlers: list[logging.Handler]) ->
 
 
 def setup_logging() -> None:
-    """初始化日志：全量日志（含错误堆栈与业务流水）统一写入当天文件 app-YYYY-MM-DD.log"""
+    """初始化日志：后端日志、前端上报日志、LLM 结构化日志分文件按天写入"""
     os.makedirs(LOG_DIR, exist_ok=True)
 
-    daily_file = DailyFileHandler(LOG_DIR, logging.INFO)
+    daily_file = DailyFileHandler(LOG_DIR, logging.INFO, prefix="app")
+    frontend_file = DailyFileHandler(LOG_DIR, logging.INFO, prefix="frontend")
 
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
@@ -139,10 +175,34 @@ def setup_logging() -> None:
     app_root.propagate = False
     _ensure_handlers(app_root, [console, daily_file])
 
-    # app.audit.* 业务流水：只向 app 根 logger 传播，不再单独写 business.log
+    # app.audit.* 业务流水：只向 app 根 logger 传播
     audit_root = logging.getLogger("app.audit")
     audit_root.setLevel(logging.INFO)
     audit_root.propagate = True
+
+    # 前端上报日志：独立文件，不再混入后端 app 日志
+    frontend_root = logging.getLogger("app.audit.frontend")
+    frontend_root.setLevel(logging.INFO)
+    frontend_root.propagate = False
+    _ensure_handlers(frontend_root, [console, frontend_file])
+
+    # LLM 结构化日志：llm-YYYY-MM-DD.log，逐行 JSON，只落文件（不打控制台）
+    llm_file = DailyFileHandler(LOG_DIR, logging.INFO, prefix="llm")
+    llm_file.setFormatter(logging.Formatter("%(message)s"))
+    llm_logger = logging.getLogger("app.llm.structured")
+    llm_logger.setLevel(logging.INFO)
+    llm_logger.propagate = False
+    _ensure_handlers(llm_logger, [llm_file])
+
+
+def write_llm_event(event: dict) -> None:
+    """写入一条 LLM 结构化日志（JSON 单行）；失败不影响主流程。"""
+    try:
+        logging.getLogger("app.llm.structured").info(
+            json.dumps(event, ensure_ascii=False, default=str)
+        )
+    except Exception:  # 日志异常绝不阻断业务
+        pass
 
 
 def get_logger(name: str = "app") -> logging.Logger:

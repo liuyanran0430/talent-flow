@@ -4,7 +4,7 @@ import { defineConfig, devices } from '@playwright/test'
  * TalentFlow 前端 E2E 测试配置
  *
  * 前置条件（二选一）：
- *   A. 已执行 `start-all.bat` 同时启动 后端(8080) + 前端(3000)（另含 MySQL）
+ *   A. 已执行 `start-all.bat` 同时启动 后端(8080) + 前端(3001)（另含 MySQL）
  *   B. 后端已在 8080 运行；Playwright 会自动用 `npm run dev:e2e` 起前端
  *
  * 后端接口使用真实数据库 + mock 混合策略：
@@ -24,7 +24,7 @@ export default defineConfig({
     ['list'],
   ],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: 'http://localhost:3001',
     // 失败即保留 trace / video，成功则丢弃（retries=0 时 on-first-retry 不会触发）
     trace: 'retain-on-failure',
     video: 'retain-on-failure',
@@ -38,7 +38,7 @@ export default defineConfig({
   ],
   webServer: {
     command: 'npm run dev:e2e',
-    url: 'http://localhost:3000',
+    url: 'http://localhost:3001',
     // 本地已有 dev server 时直接复用（dev 机上不做严格端口独占）
     reuseExistingServer: true,
     timeout: 45_000,

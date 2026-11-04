@@ -1,3 +1,4 @@
+from .async_task import AsyncTask
 from .candidate import Candidate
 from .department import Department
 from .job import Job
@@ -9,6 +10,7 @@ from .resume import ResumeInfo
 from .template import RequirementTemplate, TemplateItem
 
 __all__ = [
+    "AsyncTask",
     "Job",
     "Candidate",
     "ResumeInfo",

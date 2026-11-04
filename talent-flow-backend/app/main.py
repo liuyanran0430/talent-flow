@@ -1,4 +1,4 @@
-﻿import time
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -8,12 +8,13 @@ from .core.config import settings
 from .database import init_db
 from .core.logging_config import (
     get_logger,
-    new_trace_id,
-    reset_trace_id,
-    set_trace_id,
+    reset_session_id,
+    reset_user_id,
+    set_session_id,
+    set_user_id,
     setup_logging,
 )
-from .api import candidates, departments, jobfits, jobs, logs, matches, requirements, resumes, templates
+from .api import candidates, departments, jobfits, jobs, logs, matches, requirements, resumes, tasks, templates
 from .schemas.common import ApiResponse
 
 # 模块导入即初始化：uvicorn --reload 启动/热重载后自动生效，日志写入 logs/ 目录
@@ -31,6 +32,7 @@ TAGS_METADATA = [
     {"name": "templates", "description": "要求模板：复用招聘标准并一键应用到职位"},
     {"name": "matches", "description": "岗位匹配打分：岗位与候选人的匹配分维护"},
     {"name": "logs", "description": "日志：接收前端上报的异常日志并落盘"},
+    {"name": "tasks", "description": "异步任务：LLM 接口返回 request_id，凭该 id 轮询处理状态与结果"},
 ]
 
 
@@ -59,7 +61,6 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Trace-ID"],  # 允许前端 JS 读取 trace id
 )
 
 
@@ -72,20 +73,19 @@ def _client_ip(request: Request) -> str:
 
 
 @app.middleware("http")
-async def trace_middleware(request: Request, call_next):
-    """请求级追溯：分配/复用 X-Trace-ID，写入日志上下文并回传响应头。
+async def context_middleware(request: Request, call_next):
+    """请求上下文：记录前端会话/用户标识，供 LLM 结构化日志使用。
 
+    request_id 不由 HTTP 请求分配，只有调用 LLM 的异步任务会绑定它（等于接口返回给前端的 request_id）。
     访问日志规则：CORS 预检不记录；写操作全量记录；GET 仅记录非 2xx 或慢请求（>500ms），避免轮询刷屏。
     """
     method = request.method
     if method == "OPTIONS":
-        # 预检请求不产生业务行为，跳过 trace 分配与访问日志，避免日志被刷屏
+        # 预检请求不产生业务行为，跳过上下文绑定与访问日志，避免日志被刷屏
         return await call_next(request)
 
-    incoming = request.headers.get("X-Trace-ID") or request.headers.get("X-Request-ID")
-    trace_id = (incoming or "").strip()[:64] or new_trace_id()
-    token = set_trace_id(trace_id)
-    request.state.trace_id = trace_id
+    session_token = set_session_id(request.headers.get("X-Session-ID"))
+    user_token = set_user_id(request.headers.get("X-User-ID"))
 
     start = time.perf_counter()
     path, client = request.url.path, _client_ip(request)
@@ -96,19 +96,20 @@ async def trace_middleware(request: Request, call_next):
         access_logger.exception(
             "%s %s -> 500 (unhandled) client=%s (%.0fms)", method, path, client, duration_ms
         )
-        reset_trace_id(token)
+        reset_session_id(session_token)
+        reset_user_id(user_token)
         raise
 
     duration_ms = (time.perf_counter() - start) * 1000
     code = response.status_code
-    response.headers["X-Trace-ID"] = trace_id
     if method in ("POST", "PUT", "DELETE", "PATCH") or code >= 400 or duration_ms > 500:
         access_logger.info(
             "%s %s -> %s client=%s (%.0fms)", method, path, code, client, duration_ms
         )
     if code >= 500:
         access_logger.error("%s %s -> %s client=%s", method, path, code, client)
-    reset_trace_id(token)
+    reset_session_id(session_token)
+    reset_user_id(user_token)
     return response
 
 
@@ -138,3 +139,4 @@ app.include_router(jobfits.router)
 app.include_router(matches.router)
 app.include_router(templates.router)
 app.include_router(logs.router)
+app.include_router(tasks.router)

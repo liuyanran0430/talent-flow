@@ -30,9 +30,11 @@ def receive_frontend_log(payload: FrontendLog, request: Request):
         line += " | ua=" + payload.user_agent
     if payload.stack:
         line += "\n" + payload.stack
-    # 前端上报时携带触发错误的那次操作的 trace_id，用它覆盖本次上报请求自己的 trace，
-    # 保证「前端报错 → 后端对应请求日志」能用同一个 trace_id 串起来
-    extra = {"trace_id": payload.trace_id} if payload.trace_id else {}
+    # 前端上报时携带触发错误的那次 LLM 请求的 request_id，覆盖本次上报请求自己的上下文，
+    # 保证「前端报错 → 后端对应 LLM 请求日志」能用同一 request_id 串起来
+    extra = {}
+    if payload.request_id:
+        extra["request_id"] = payload.request_id
     if payload.level == "error":
         audit.error(line, extra=extra)
     else:

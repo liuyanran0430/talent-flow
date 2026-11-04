@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import json
 import os
 import uuid
@@ -10,13 +10,14 @@ from ..database import get_db
 from ..schemas.candidate import CandidateCreate
 from ..schemas.common import ApiResponse
 from ..schemas.resume import ParseRequest, UploadResult
+from ..services.async_tasks import create_task, execute_task
 from ..services.candidate_service import CandidateNotFoundError, CandidateService
 from ..services.resume_parser import parse_resume
 from ..services.resume_tasks import run_parse
 from ..core.logging_config import (
     get_audit_logger,
     get_logger,
-    get_trace_id,
+    set_request_id,
 )
 
 router = APIRouter(prefix="/resumes", tags=["resumes"])
@@ -106,14 +107,32 @@ def analyze_resume(
             {"candidate_id": candidate_id, "status": "processing"}, message="already parsing"
         )
     job_id = cand.resume.job_id if cand.resume else None
-    task_id = uuid.uuid4().hex[:8]
-    logger.info("触发简历解析 candidate_id=%s job_id=%s", candidate_id, job_id)
-    audit.info("简历解析触发 candidate_id=%s job_id=%s", candidate_id, job_id)
-    # 异步执行解析：延续触发请求的 trace_id，并带独立 task_id，保证后台日志可追溯
-    background_tasks.add_task(
-        run_parse, candidate_id, task_id=task_id, trace_id=get_trace_id()
+    request_id = create_task(db, "resume_parse")
+    # 触发接口属于 LLM 相关接口，绑定 request_id，本次请求的日志与访问日志都带上它
+    set_request_id(request_id)
+    logger.info("简历解析任务已入队 candidate_id=%s job_id=%s request_id=%s", candidate_id, job_id, request_id)
+    audit.info(
+        "简历解析触发 candidate_id=%s job_id=%s request_id=%s",
+        candidate_id, job_id, request_id,
     )
-    return ApiResponse.ok({"candidate_id": candidate_id, "status": "processing"})
+    # 异步执行解析：后台任务绑定接口返回的 request_id，前端凭该 id 轮询状态
+    background_tasks.add_task(
+        execute_task,
+        request_id,
+        lambda: _run_parse_task(candidate_id, request_id),
+    )
+    return ApiResponse.ok({"candidate_id": candidate_id, "status": "processing", "request_id": request_id})
+
+
+def _run_parse_task(candidate_id: int, request_id: str) -> dict:
+    """后台任务入口：执行简历解析，任务结果返回候选人 id（详情由前端另行拉取）。
+
+    解析失败时抛错以标记任务 failed（候选人已置 review 并带失败说明），前端轮询可提示。
+    """
+    ok = run_parse(candidate_id, False, request_id=request_id)
+    if not ok:
+        raise RuntimeError("简历解析失败，请手动补全信息或重试")
+    return {"candidate_id": candidate_id}
 
 
 @router.post(

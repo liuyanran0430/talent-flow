@@ -109,12 +109,26 @@ cp .env.example .env
 | `DB_USER` / `DB_PASSWORD` | `root` / 空 | MySQL 账号密码 |
 | `DB_NAME` | `talent_flow` | 数据库名（**需提前创建**） |
 | `DATABASE_URL` | 空 | 可选，直接覆盖连接串；本地快速验证可设为 `sqlite:///./local.db` |
-| `FRONTEND_ORIGIN` | `http://localhost:5173` | CORS 白名单，多个用英文逗号分隔 |
+| `FRONTEND_ORIGIN` | `http://localhost:3001` | CORS 白名单，多个用英文逗号分隔 |
 | `OPENAI_API_KEY` | 无 | LLM API Key（简历/JD 解析必需） |
 | `OPENAI_API_BASE` | 无 | OpenAI 兼容接口地址，如 `https://api.deepseek.com` |
 | `LLM_MODEL` | `deepseek-v4-pro` | 模型名（如 `deepseek-v4-flash`、`qwen-max`） |
+| `LLM_TIMEOUT` | `120` | 单次请求硬超时（秒），超时视为失败并进入重试 |
+| `LLM_MAX_TOKENS` | `4000` | 单次输出 token 上限，配合输入截断防止超出上下文窗口 |
+| `LLM_MAX_RETRIES` | `3` | 可重试错误最大重试次数（总尝试 = 1 + 该值），退避 1s/2s/4s |
+| `LLM_RETRY_INITIAL_WAIT` / `LLM_RETRY_MAX_WAIT` | `1.0` / `10.0` | 退避起始/单次最长等待秒数 |
+| `LLM_RETRY_JITTER` | `0.0` | 退避随机抖动（秒）；0 = 严格 1s/2s/4s |
 
 > 未配置 LLM 时服务仍可启动，但「生成要求项」「简历解析」会失败。
+
+### LLM 调用错误处理策略
+
+| 问题 | 表现 | 处理策略 |
+| --- | --- | --- |
+| 429 限流 | 供应商拒绝请求 | 指数退避重试（1s/2s/4s），实现见 `app/llm/client.py` |
+| 超时 | 响应迟迟不返回 | `LLM_TIMEOUT` 硬超时 + 重试上限 |
+| 上下文超限 | Prompt 过长被拒 | 不重试；预处理阶段截断输入（简历 8000 / JD 6000 / 要求项 4000 字符）+ `LLM_MAX_TOKENS` 输出上限 |
+| JSON 解析失败 | 模型输出不合规 | 重试一次（`app/llm/parse_retry.py`）；再失败降级转人工：简历解析置 `review` 待 HR 补全，JD 生成返回错误由 HR 手动填写 |
 
 ---
 
@@ -185,7 +199,7 @@ npm install
 npm run dev
 ```
 
-前端默认 `http://localhost:5173`，与后端 `FRONTEND_ORIGIN` 保持一致。
+前端默认 `http://localhost:3001`，与后端 `FRONTEND_ORIGIN` 保持一致。
 
 ### 可选：不用 MySQL，快速本地验证
 
@@ -207,15 +221,16 @@ DATABASE_URL=sqlite:///./local.db
 | 部门 | `GET/POST /departments`、`GET/PUT/DELETE /departments/{id}` | 部门 CRUD |
 | 职位 | `GET/POST /jobs`、`GET/PUT/DELETE /jobs/{id}` | 职位 CRUD，列表含推进统计 |
 | 职位要求 | `GET /requirements/{job_id}/items` | 要求项列表 |
-| | `POST /requirements/{job_id}/generate` | LLM 从 JD 生成要求项（仅预览） |
+| | `POST /requirements/{job_id}/generate` | **异步**调用 LLM 从 JD 生成要求项：立即返回 `request_id`，结果经 `GET /tasks/{request_id}` 获取（仅预览） |
 | | `POST /requirements/{job_id}/items/batch` | 批量覆盖写入要求项 |
 | | `POST /requirements/{job_id}/items`、`PUT/DELETE /requirements/items/{item_id}` | 单条增改删 |
-| | `POST /requirements/{job_id}/recalculate` | 后台重算该职位候选人（重新解析 + 重算分数） |
+| | `POST /requirements/{job_id}/recalculate` | **异步**重算该职位候选人（重新解析 + 重算分数），返回 `request_id` |
 | 候选人 | `GET /candidates?search=&status=&job_id=&page=&page_size=` | 分页列表（`page_size` 上限 1000） |
 | | `GET/POST /candidates`、`GET/PUT/DELETE /candidates/{id}` | 候选人 CRUD / 详情 |
 | 简历 | `POST /resumes/upload` | multipart 上传，字段 `file` + 可选 `job_id`；内容查重 |
-| | `POST /resumes/{candidate_id}/analyze` | 触发后台 LLM 解析（状态 `processing → review/finish`） |
+| | `POST /resumes/{candidate_id}/analyze` | **异步**触发 LLM 解析：立即返回 `request_id`，凭该 id 轮询任务状态 |
 | | `POST /resumes/parse` | 同步解析指定本地路径（调试用） |
+| 异步任务 | `GET /tasks/{request_id}` | 查询任务状态 `pending/running/success/failed`；成功后 `result` 为业务结果，失败时 `error` 为原因 |
 | 匹配建议 | `GET /jobfits/candidates/{candidate_id}`、`POST /jobfits`、`PUT/DELETE /jobfits/{id}` | jobfits CRUD |
 | 匹配打分 | `GET /matches/candidates/{candidate_id}`、`POST /matches`、`PUT/DELETE /matches/{id}` | matches CRUD |
 | 要求模板 | `GET/POST /templates`、`GET/PUT/DELETE /templates/{id}` | 模板 CRUD（详情含要求项） |
@@ -278,25 +293,45 @@ POST /resumes/{id}/analyze
 
 | 路径 | 说明 |
 | --- | --- |
-| `logs/app-YYYY-MM-DD.log` | 全量应用日志（INFO 及以上，含业务流水、错误堆栈与访问日志），每天一个文件，跨天自动切换 |
+| `logs/app-YYYY-MM-DD.log` | 后端全量日志（业务流水、访问日志、错误堆栈），每天一个文件，跨天自动切换 |
+| `logs/frontend-YYYY-MM-DD.log` | 前端上报日志（浏览器 warn/error、未捕获异常），与后端日志分开保存 |
+| `logs/llm-YYYY-MM-DD.log` | LLM 调用结构化日志，每行一个 JSON，用于排障与用量分析 |
 | `uploads/` | 简历文件，使用 UUID 文件名；数据库 `candidates.resume_path` 保存相对路径 |
 | `openapi.yaml` | 已导出的接口文档，可通过脚本重新生成 |
 
-不再单独生成 `errors.log` / `business.log` / `uvicorn.err.log`，所有日志统一写入当天文件。
+不再单独生成 `errors.log` / `business.log` / `uvicorn.err.log`。
 
 每条日志格式：
 
 ```
-2026-11-03 22:36:37 | INFO    | trace_id=deef17b83b8c4a1f | task=- | app.audit.department | 部门创建 id=1 name=日志验证部门
+2026-11-03 22:36:37 | INFO    | request_id=- | app.audit.department | 部门创建 id=1 name=日志验证部门
 ```
 
-### trace id（trace_id）
+### request id（request_id）
 
-- 前端一次用户操作（点击/回车/表单提交）生成一个 16 位 trace id，通过请求头 `X-Trace-ID` 传给后端；后端优先复用，缺失时自动生成；
-- trace id 写入日志上下文并注入所有日志行，响应头回传 `X-Trace-ID`（CORS 已配置 `expose_headers`，前端 JS 可读取）；同时兼容旧客户端传入的 `X-Request-ID`；
-- CORS 预检（OPTIONS）不分配 trace、不记录访问日志，避免刷屏；
+- 只有调用 LLM 的接口才有 request_id：接口立即返回该 id（32 位），前端凭它轮询 `GET /tasks/{request_id}` 获取处理状态与结果；
+- 后台任务与模型调用绑定同一个 request_id，日志行自动注入 `request_id=`；非 LLM 请求该字段为 `-`；
+- 前端通过请求头 `X-Session-ID` 传入会话 id，后端写入日志上下文，供 LLM 结构化日志记录 `session_id`；
+- CORS 预检（OPTIONS）不记录访问日志，避免刷屏；
 - 访问日志规则：所有写操作（POST/PUT/DELETE/PATCH）全量记录，GET 仅记录非 2xx 或耗时 > 500ms 的请求；
 - 访问日志包含方法、路径、状态码、客户端 IP 与耗时。
+
+### LLM 结构化日志（`logs/llm-YYYY-MM-DD.log`）
+
+每次模型调用由 `LLMRunCallbackHandler` 输出一行 JSON，字段与排障问题一一对应：
+
+| 字段 | 内容 | 排障时回答什么问题 |
+| --- | --- | --- |
+| `request_id` | 本次 LLM 请求唯一标识，与接口返回给前端的一致 | 这次报错对应哪次请求 |
+| `user_id` / `session_id` | 用户与会话（当前无登录体系，user_id 为空） | 影响的是谁、哪段对话 |
+| `model` / `prompt_version` | 模型与 Prompt 版本（如 `resume_parse/v1`、`jd_generate/v1`） | 当时用的是哪一版 |
+| `retrieval_ids` | 命中的知识 chunk（暂未接入 RAG，固定为空数组） | 检索环节召回了什么 |
+| `tool_calls` | 工具名与状态码（暂未接入工具调用，固定为空数组） | 外部系统是否正常 |
+| `latency_ms` / `prompt_tokens` / `completion_tokens` / `total_tokens` | 耗时与用量 | 慢在哪、贵在哪 |
+| `error_type` | 错误分类：`rate_limit` / `timeout` / `connection` / `bad_request` / `server_error` / `unknown` | 是模型错还是工具错 |
+| `status` | `success` / `error` | 本次调用是否成功 |
+
+同样的调用明细仍写入 `llm_runs` 表（request_id、model、token、latency、状态、错误信息）。
 
 ### 关键业务事件（`app.audit.*`，写入当天文件）
 
@@ -308,22 +343,23 @@ POST /resumes/{id}/analyze
 | `app.audit.candidate` | 候选人创建、更新（字段/状态）、删除 |
 | `app.audit.template` | 模板创建、应用到职位、删除 |
 | `app.audit.jobfit` / `app.audit.match` | 匹配建议、匹配打分的人工新增/更新/删除 |
-| `app.audit.frontend` | 前端上报的 warn/error（含 session_id、trace_id、页面、URL、UA、堆栈） |
+| `app.audit.frontend` | 前端上报的 warn/error（含 session_id、request_id、页面、URL、UA、堆栈） |
 
 ### 后台任务追溯
 
-简历解析与要求重算均为后台任务，日志行额外携带 `task=<8位任务id>`：
+简历解析与要求重算均为后台任务，统一使用接口返回的 `request_id` 串联：
 
-- 触发接口记录当前 `trace_id`，并生成独立 `task_id`（日志字段 `task=`）；
-- 后台任务沿用触发请求的 `trace_id` 并绑定自己的 `task_id`，因此同一次操作的前后台日志可用 `trace_id` 串联，多个异步任务用 `task` 区分；
+- 触发接口创建 `async_tasks` 记录并把 `request_id` 立即返回前端；
+- 后台任务入口绑定该 `request_id`，期间所有日志行（`request_id=`）与 LLM 结构化日志都用同一个 id；
 - 解析进度：`简历解析触发 → 简历解析开始 → 简历解析完成/失败`，同时候选人状态从 `processing` 变为 `review`/`finish`。
 
 ### 排障路径
 
-1. 用户反馈问题时，从浏览器 Network 获取该请求的响应头 `X-Trace-ID`（前端调试期也可查看 `window.__LAST_TRACE_ID__`）；
-2. 在 `logs/app-YYYY-MM-DD.log` 中 `grep trace_id=<该id>` 得到同一次操作的全部业务、访问与错误日志；
-3. 若为前端报错，在同一文件中按 `session_id` 或 `trace_id` 检索同一操作的前端日志与页面路径；
-4. 异常堆栈同样记录在该文件中（`logger.exception` 会带完整堆栈）。
+1. 用户反馈问题时，从页面提示或 `GET /tasks/{request_id}` 拿到 `request_id`（前端调试期也可查看 `window.__TALENT_REQUEST_ID__`）；
+2. 在 `logs/app-YYYY-MM-DD.log` 中 `grep request_id=<该id>` 得到该次请求的全部业务、访问与错误日志；
+3. 在 `logs/llm-YYYY-MM-DD.log` 中按 `request_id` 过滤，查看每次模型调用的 model、prompt_version、耗时、token 与 error_type；
+4. 若为前端报错，在 `logs/frontend-YYYY-MM-DD.log` 中按 `session_id` 或 `request_id` 检索前端日志与页面路径；
+5. 异常堆栈同样记录在该文件中（`logger.exception` 会带完整堆栈）。
 
 重新导出 OpenAPI：
 
@@ -338,7 +374,7 @@ python scripts/export_openapi.py -o openapi.json # 输出 JSON
 
 1. **必须在后端根目录启动**（`uvicorn app.main:app`），否则 `.env` 不会被加载、`uploads/` 相对路径会错位。
 2. **`.doc` 旧格式无法解析**：上传接口允许 `doc`，但解析器仅支持 PDF/DOCX/TXT/MD，旧版 `.doc` 会在「开始分析」时失败，建议提前另存为 `.docx` 或 `.pdf`。
-3. **解析为后台任务**：`/resumes/{id}/analyze` 立即返回 `processing`，前端轮询 `/candidates/{id}`；若服务重启导致任务丢失，超过 3 分钟可重新触发解析（僵死自愈）。
+3. **解析为异步任务**：`/resumes/{id}/analyze` 立即返回 `request_id` 与 `processing`，前端轮询 `GET /tasks/{request_id}` 拿到 `success/failed`；若服务重启导致任务丢失，超过 3 分钟可重新触发解析（僵死自愈）。
 4. **修改要求项不会自动重算已有候选人**，需显式调用 `/requirements/{job_id}/recalculate`。
 5. `APP_DEBUG=true` 会输出大量 SQL，日常使用建议置为 `false`。
 6. `.env` 含密钥，已在 `.gitignore` 中忽略，请勿提交；`openapi_tmp.json` 为历史调试文件，可忽略。

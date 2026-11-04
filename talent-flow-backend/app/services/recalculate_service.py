@@ -1,4 +1,4 @@
-﻿"""要求配置变化后的候选人重算：后台任务。
+"""要求配置变化后的候选人重算：后台任务。
 
 流程：串行重新解析该职位下已解析候选人（重建 jobfits）→ 按算法参数重算得分写入 matches。
 """
@@ -11,11 +11,9 @@ from ..database import SessionLocal
 from ..core.logging_config import (
     get_audit_logger,
     get_logger,
-    get_trace_id,
-    reset_task_id,
-    reset_trace_id,
-    set_task_id,
-    set_trace_id,
+    get_request_id,
+    reset_request_id,
+    set_request_id,
 )
 from ..models import Match
 from ..repositories import CandidateRepository, JobFitRepository, MatchRepository, RequirementRepository
@@ -35,13 +33,11 @@ def count_recalculable_candidates(db: Session, job_id: int) -> int:
 def recalc_job_candidates(
     job_id: int,
     params: RecalculatePayload,
-    task_id: str | None = None,
-    trace_id: str | None = None,
+    request_id: str | None = None,
 ) -> None:
     """后台任务：串行重新解析该职位下已解析候选人（重建 jobfits），随后重算得分并写入 matches。"""
-    task_id = task_id or uuid.uuid4().hex[:8]
-    trace_token = set_trace_id(trace_id) if trace_id else None
-    task_token = set_task_id(task_id)
+    request_id = request_id or uuid.uuid4().hex[:8]
+    request_token = set_request_id(request_id)
     db = SessionLocal()
     try:
         cand_repo = CandidateRepository(db)
@@ -55,11 +51,11 @@ def recalc_job_candidates(
             if c.resume and c.resume.resume_path
         ]
         audit.info("要求重算开始 job_id=%s candidates=%s", job_id, len(cand_ids))
-        # 逐个重新解析：run_parse 内部自建会话并覆盖式重建 jobfits（沿用同一 trace 与 task）
+        # 逐个重新解析：run_parse 内部自建会话并覆盖式重建 jobfits（沿用同一 request_id）
         parse_failed = 0
         for cid in cand_ids:
             try:
-                run_parse(cid, preserve_status=True, task_id=task_id, trace_id=get_trace_id())
+                run_parse(cid, preserve_status=True, request_id=get_request_id())
             except Exception as e:
                 parse_failed += 1
                 logger.exception("要求重算：候选人简历解析失败 candidate_id=%s: %s", cid, e)
@@ -88,7 +84,5 @@ def recalc_job_candidates(
             job_id, len(cand_ids), parse_failed, score_failed,
         )
     finally:
-        reset_task_id(task_token)
-        if trace_token is not None:
-            reset_trace_id(trace_token)
+        reset_request_id(request_token)
         db.close()

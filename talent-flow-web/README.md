@@ -23,10 +23,13 @@
 - 会话 id 保存在 `sessionStorage` 的 `talent-flow-session-id`，同一标签页会话内稳定，可通过 `logger.sessionId` 或 `window.__TALENT_SESSION_ID__` 查看；
 - 页面切换会记录 `nav` info 日志（仅控制台，不上报），当前页面同步到 `window.__TALENT_SECTION__`；
 - `warn`/`error` 日志（含全局未捕获异常、未处理 Promise 拒绝、错误 Toast）自动上报后端，`keepalive` 保证页面卸载时尽力发出；
-- 一次用户操作（点击/回车/表单提交）生成一个 `trace_id`（`src/utils/trace.js`），所有接口经 `src/utils/api.js` 的 `apiFetch` 自动带上 `X-Trace-ID` 请求头；
-- 后端每个响应都回传 `X-Trace-ID`（CORS 已配置 `expose_headers`，前端 JS 可读取），最近一次请求的 id 保存在 `window.__LAST_TRACE_ID__`，也可在浏览器 Network 面板查看；
-- 排障时用该 `trace_id` 在后端 `logs/app-YYYY-MM-DD.log` 检索同一操作的全部日志；前端 warn/error 上报也会携带 `trace_id`，与后端日志自动对齐；
-- 前端日志在后端按 `session_id` 串联，可还原同一用户会话的操作路径。
+- 接口失败（非 2xx / 网络错误）由 `apiFetch` 自动派发 `talent:api-error`，logger 用当前 `request_id` 记录，前后端同一次 LLM 请求的 `request_id` 完全一致；
+- 所有接口经 `src/utils/api.js` 的 `apiFetch` 自动带上 `X-Session-ID` 请求头（会话 id 定义在 `src/utils/requestContext.js`）；
+- `request_id` 只有调用 LLM 的异步接口才有：接口返回后由页面调用 `setActiveRequestId` 写入上下文，期间前端日志都带上它，任务结束自动清除；
+- 控制台日志前缀为 `[时间][request_id][tag]`，无 request_id 时显示 `-`；内存缓冲 `window.__TALENT_LOGS__` 的条目同样包含 `request_id`；
+- 当前可查看 `window.__TALENT_REQUEST_ID__`（活跃的 LLM 请求 id）与 `window.__TALENT_SESSION_ID__`（会话 id）；
+- 排障时用该 `request_id` 在后端 `logs/app-YYYY-MM-DD.log` 与 `logs/llm-YYYY-MM-DD.log` 检索，在 `logs/frontend-YYYY-MM-DD.log` 检索同一次操作的前端报错（含 `request_id` 字段），两侧用同一个 id 对齐；
+- 前端日志在后端 `frontend-YYYY-MM-DD.log` 中按 `session_id` 串联，可还原同一用户会话的操作路径。
 
 ### 匹配得分算法
 
@@ -47,7 +50,7 @@
 talent-flow-web/
 ├── index.html               # 入口 HTML
 ├── package.json             # 依赖与脚本
-├── vite.config.js           # Vite 配置（端口 3000）
+├── vite.config.js           # Vite 配置（端口 3001）
 ├── tailwind.config.js       # Tailwind 扫描范围
 ├── postcss.config.js        # Tailwind + autoprefixer
 ├── src/
@@ -121,7 +124,7 @@ npm install
 npm run dev
 ```
 
-- 默认地址：`http://localhost:3000`
+- 默认地址：`http://localhost:3001`
 - `vite.config.js` 中 `server.open: true`，启动后会自动打开浏览器
 - 端口被占用时修改 [vite.config.js](file:///e:/AI全栈/workspace/talent-flow/talent-flow-web/vite.config.js) 的 `server.port`；若改动端口，请同步后端 `.env` 的 `FRONTEND_ORIGIN`（CORS 白名单）
 
@@ -136,7 +139,7 @@ npm run preview   # 本地预览构建产物，默认 http://localhost:4173
 
 ### 快速验证
 
-1. 打开 `http://localhost:3000`，左侧出现 5 个菜单且无报错；
+1. 打开 `http://localhost:3001`，左侧出现 5 个菜单且无报错；
 2. 进入「职位管理」，列表能加载（说明后端 `/jobs` 正常）；
 3. 进入「导入简历」，可上传 PDF 并观察解析状态。
 
@@ -153,6 +156,7 @@ npm run preview   # 本地预览构建产物，默认 http://localhost:4173
 - `/candidates`、`/candidates/{id}`
 - `/jobfits/candidates/{candidate_id}`、`/jobfits/{id}`
 - `/matches/candidates/{candidate_id}`、`/matches`
+- LLM 相关异步接口：`POST /requirements/{job_id}/generate`、`POST /requirements/{job_id}/recalculate`、`POST /resumes/{candidate_id}/analyze` 立即返回 `request_id`，前端用 `GET /tasks/{request_id}` 轮询至 `success/failed`；轮询封装见 `src/utils/api.js` 的 `pollTask`
 - `/logs/frontend`
 
 > API 基址硬编码为 `http://localhost:8080`（部分页面使用 `const API_BASE`，部分直接写完整 URL）。若后端端口变化，需要同时修改 `src/pages/` 下的 5 个页面与 `src/utils/logger.js`、`src/utils/matchScore.js`，共 7 个文件。
@@ -166,5 +170,5 @@ npm run preview   # 本地预览构建产物，默认 http://localhost:4173
 | 页面数据为空、Toast 提示「加载失败」 | 后端未启动或端口不是 8080；浏览器控制台查看 CORS 报错，确认后端 `FRONTEND_ORIGIN` 与前端地址一致 |
 | 图标不显示 | `@iconify/react` 需要访问 Iconify CDN，检查网络/代理 |
 | 简历上传失败（400） | 仅支持 pdf/doc/docx，文件不能为空且 ≤ 20MB；重复简历会返回 `message=duplicate` |
-| 解析一直停留在「解析中」 | 后端 LLM 未配置或调用超时；后端超过 3 分钟会自动允许重新解析，也可重试「开始分析」；用响应头 `X-Trace-ID` 在 `logs/app-YYYY-MM-DD.log` 按 `trace_id` 查看解析进度 |
+| 解析一直停留在「解析中」 | 后端 LLM 未配置或调用超时；后端超过 3 分钟会自动允许重新解析，也可重试「开始分析」；用接口返回的 `request_id` 在 `logs/app-YYYY-MM-DD.log` 与 `logs/llm-YYYY-MM-DD.log` 查看解析进度与模型调用明细 |
 | 端口冲突 | 修改 `vite.config.js` 的 `server.port`，并同步后端 `FRONTEND_ORIGIN` |

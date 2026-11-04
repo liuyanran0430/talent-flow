@@ -33,6 +33,7 @@ export default function Jobs() {
   const [editingDeptId, setEditingDeptId] = useState(null)
   const [jobs, setJobs] = useState([])
   const [page, setPage] = useState(1) // 当前页码
+  const [deleteTarget, setDeleteTarget] = useState(null) // 待删除职位 { id, name }
 
   const fetchJobs = async () => {
     try {
@@ -132,6 +133,21 @@ export default function Jobs() {
       fetchJobs()
     } catch (e) {
       showToast(`${isEdit ? '修改' : '保存'}职位失败：${e.message}`, 'error')
+    }
+  }
+
+  const deleteJob = async () => {
+    if (!deleteTarget) return
+    const { id, name } = deleteTarget
+    try {
+      const res = await apiFetch(`http://localhost:8080/jobs/${id}`, { method: 'DELETE' })
+      const json = await res.json()
+      if (!res.ok || json.code !== 0) throw new Error(json.message || '删除失败')
+      setDeleteTarget(null)
+      showToast(`职位「${name}」已删除`)
+      fetchJobs()
+    } catch (e) {
+      showToast(`删除职位失败：${e.message}`, 'error')
     }
   }
 
@@ -335,6 +351,12 @@ export default function Jobs() {
                       >
                         要求配置
                       </button>
+                      <button
+                        onClick={() => setDeleteTarget({ id: j.id, name: j.name })}
+                        className="text-rose-600 hover:text-rose-700"
+                      >
+                        删除
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -370,6 +392,12 @@ export default function Jobs() {
                         className="font-medium text-cyan-700 disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         要求配置
+                      </button>
+                      <button
+                        onClick={() => setDeleteTarget({ id: j.id, name: j.name })}
+                        className="font-medium text-rose-600"
+                      >
+                        删除
                       </button>
                     </div>
                   </div>
@@ -561,6 +589,35 @@ export default function Jobs() {
             <button onClick={() => setDeptOpen(false)} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium">取消</button>
             <button onClick={saveDepartment} className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white">
               {editingDeptId ? '保存修改' : '保存部门'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* 删除职位确认弹窗 */}
+      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="max-w-md">
+        <ModalHeader
+          title="删除职位"
+          subtitle="删除后不可恢复，请确认。"
+          onClose={() => setDeleteTarget(null)}
+        />
+        <div className="px-4 py-5 md:px-6 text-sm leading-6 text-slate-600">
+          确定删除职位「<span className="font-medium text-slate-800">{deleteTarget?.name}</span>」吗？
+          该职位的要求项与匹配记录会一并删除，候选人简历的意向职位将置空。
+        </div>
+        <div className="flex items-center justify-end rounded-b-2xl bg-slate-50 px-6 py-4">
+          <div className="flex gap-3">
+            <button
+              onClick={() => setDeleteTarget(null)}
+              className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium"
+            >
+              取消
+            </button>
+            <button
+              onClick={deleteJob}
+              className="rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-rose-700"
+            >
+              确认删除
             </button>
           </div>
         </div>

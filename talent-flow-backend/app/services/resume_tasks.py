@@ -1,4 +1,4 @@
-﻿"""简历解析后台任务：LLM 解析 + 结果落库编排。
+"""简历解析后台任务：LLM 解析 + 结果落库编排。
 
 与 services/resume_parser.py 的区别：resume_parser 是纯 LLM 解析（无 DB），
 本模块负责把解析结果写回候选人/简历/匹配建议，由后台任务调用。
@@ -11,10 +11,8 @@ from ..database import SessionLocal
 from ..core.logging_config import (
     get_audit_logger,
     get_logger,
-    reset_task_id,
-    reset_trace_id,
-    set_task_id,
-    set_trace_id,
+    reset_request_id,
+    set_request_id,
 )
 from ..repositories import CandidateRepository, JobFitRepository, RequirementRepository
 from ..models.jobfit import JobFit
@@ -27,18 +25,16 @@ audit = get_audit_logger("resume")
 def run_parse(
     candidate_id: int,
     preserve_status: bool = False,
-    task_id: str | None = None,
-    trace_id: str | None = None,
-) -> None:
+    request_id: str | None = None,
+) -> bool:
     """后台解析任务：调用 LLM 解析简历，写回基本信息并生成职位匹配建议（jobfits）。
 
     :param preserve_status: 要求配置变化触发的重算场景下保持原状态（finish 不降级回 review）
-    :param task_id: 任务 id，用于区分同一 trace 下的多个异步任务（未传则自动生成）
-    :param trace_id: 触发请求的 trace id，后台任务延续同一 trace_id 记录日志
+    :param request_id: 接口返回给前端的异步任务 id，日志与 LLM 结构化记录沿用该 id
+    :return: 解析是否成功；失败时已把候选人置为 review 等待人工复核
     """
-    task_id = task_id or uuid.uuid4().hex[:8]
-    trace_token = set_trace_id(trace_id) if trace_id else None
-    task_token = set_task_id(task_id)
+    request_id = request_id or uuid.uuid4().hex[:8]
+    request_token = set_request_id(request_id)
     db = SessionLocal()
     try:
         cand_repo = CandidateRepository(db)
@@ -49,7 +45,7 @@ def run_parse(
         resume = cand.resume if cand else None
         if not cand or not resume or not resume.resume_path:
             audit.warning("简历解析跳过 candidate_id=%s 原因=候选人/简历不存在", candidate_id)
-            return
+            return False
         job_id = resume.job_id
         prev_status = cand.status
         audit.info(
@@ -75,7 +71,7 @@ def run_parse(
                 cand.status = "review"
                 resume.info = "简历解析失败，请手动补全信息"
             cand_repo.commit()
-            return
+            return False
 
         basic = result.get("basic") or {}
         if basic.get("name"):
@@ -125,8 +121,7 @@ def run_parse(
             "简历解析完成 candidate_id=%s job_id=%s status=%s suggestions=%s",
             cand.id, job_id, cand.status, saved_fits,
         )
+        return True
     finally:
-        reset_task_id(task_token)
-        if trace_token is not None:
-            reset_trace_id(trace_token)
+        reset_request_id(request_token)
         db.close()

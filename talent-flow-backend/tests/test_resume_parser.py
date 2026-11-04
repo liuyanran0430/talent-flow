@@ -112,6 +112,62 @@ def test_parse_resume_with_fake_llm_filters_weak_advantages(monkeypatch, tmp_pat
     assert out["risks"] == [{"point": "未提及管理经验", "evidence": "简历未提及"}]
 
 
+def test_parse_resume_retries_once_on_bad_json(monkeypatch, tmp_path):
+    """JSON 解析失败 → 重试一次：首次输出不合规、第二次正常时解析成功。"""
+    resume = tmp_path / "resume.txt"
+    resume.write_text("张三，2019-2024 年负责 Python 后端开发。", encoding="utf-8")
+
+    good = json.dumps({
+        "basic": {"name": "张三", "phone": None, "email": None, "experience": "5 年"},
+        "suggestions": [
+            {"name": "Python 开发经验", "suggestion": "满足", "evidence": "负责 Python 后端开发"},
+        ],
+        "advantages": [
+            {"point": "5 年 Python 后端经验", "evidence": "2019-2024 年负责 Python 后端开发"},
+        ],
+        "risks": [],
+    }, ensure_ascii=False)
+
+    calls = {"n": 0}
+
+    def _fake_llm(_messages):
+        calls["n"] += 1
+        # 第一次输出不合规（不是合法 JSON），第二次返回正常结果
+        return AIMessage(content="抱歉，我无法输出 JSON" if calls["n"] == 1 else good)
+
+    class _FakeClient:
+        chat_model = RunnableLambda(_fake_llm)
+
+    monkeypatch.setattr(rp, "get_model_client", lambda: _FakeClient())
+
+    out = json.loads(parse_resume(str(resume), [{"name": "Python 开发经验", "standard": "3 年以上"}]))
+    assert calls["n"] == 2  # 首次 + 重试一次
+    assert out["basic"]["name"] == "张三"
+
+
+def test_parse_resume_raises_after_retry_to_degrade(monkeypatch, tmp_path):
+    """JSON 解析重试一次仍失败 → 抛出原异常，由 resume_tasks 降级转人工（置 review）。"""
+    from langchain_core.exceptions import OutputParserException
+
+    resume = tmp_path / "resume.txt"
+    resume.write_text("张三 5 年 Python 经验", encoding="utf-8")
+
+    calls = {"n": 0}
+
+    def _fake_llm(_messages):
+        calls["n"] += 1
+        return AIMessage(content="始终不是 JSON")  # 两次都输出不合规
+
+    class _FakeClient:
+        chat_model = RunnableLambda(_fake_llm)
+
+    monkeypatch.setattr(rp, "get_model_client", lambda: _FakeClient())
+
+    with pytest.raises(OutputParserException):
+        parse_resume(str(resume), [{"name": "Python 开发经验"}])
+    assert calls["n"] == 2  # 只重试一次，不无限重试
+
+
 def test_real_llm_is_blocked_by_conftest_fixture(tmp_path):
     """conftest 的 LLM 隔离必须生效：未 mock 时禁止真实调用。"""
     resume = tmp_path / "resume.txt"

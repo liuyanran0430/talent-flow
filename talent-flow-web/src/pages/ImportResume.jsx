@@ -3,7 +3,8 @@ import Icon from '../components/Icon'
 import Modal, { ModalHeader } from '../components/Modal'
 import { useApp } from '../context/AppContext'
 import { upsertCandidateMatch } from '../utils/matchScore'
-import { API_BASE, apiFetch } from '../utils/api'
+import { API_BASE, apiFetch, pollTask } from '../utils/api'
+import { clearActiveRequestId, setActiveRequestId } from '../utils/requestContext'
 import { JobfitTable, AiAnalysisBlock } from '../components/CandidateBlocks'
 
 const PAGE_SIZE = 5 // 导入队列每页条数
@@ -308,13 +309,14 @@ export default function ImportResume() {
     selectAndPollById(item.candidate_id)
   }
 
-  // 开始分析：触发后端解析并轮询至完成
+  // 开始分析：触发后端异步解析（返回 request_id），轮询任务完成后刷新候选人详情
   const startAnalyze = async (item) => {
     if (!item.candidate_id) return
     try {
       const res = await apiFetch(`${API_BASE}/resumes/${item.candidate_id}/analyze`, { method: 'POST' })
       const json = await res.json()
       if (!res.ok || json.code !== 0) throw new Error(json.message || '启动解析失败')
+      const requestId = json.data?.request_id
       setQueue((q) =>
         q.map((it) =>
           it.candidate_id === item.candidate_id
@@ -323,8 +325,30 @@ export default function ImportResume() {
         )
       )
       showToast(`开始解析「${item.name}」`)
-      // forceParsing：analyze 已成功，无论首次查询状态如何都显示 loading 并轮询
-      selectAndPollById(item.candidate_id, true)
+      if (requestId) {
+        // 后端异步任务：先显示解析中，再凭 request_id 轮询到 success/failed
+        // 本次 LLM 请求的 request_id 供前端日志带上，与后端结构化日志对应
+        setActiveRequestId(requestId)
+        setPreviewVisible(true)
+        setMatchRows([])
+        setParsing(true)
+        pollIdRef.current = item.candidate_id
+        try {
+          await pollTask(requestId, { interval: 1500, timeout: 180000 })
+          showToast('解析完成，请确认预览信息')
+        } catch (e) {
+          showToast(`解析失败：${e.message}`, 'error')
+        } finally {
+          clearActiveRequestId(requestId)
+        }
+        // 无论成功失败都拉一次最新候选人状态（失败时 status 仍为 review 并带失败说明）
+        if (pollIdRef.current === item.candidate_id) {
+          await selectAndPollById(item.candidate_id, false)
+        }
+      } else {
+        // 兼容旧版后端：无 request_id 时回退到候选人状态轮询
+        selectAndPollById(item.candidate_id, true)
+      }
     } catch (e) {
       showToast(`解析启动失败：${e.message}`, 'error')
     }

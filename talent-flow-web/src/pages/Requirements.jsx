@@ -3,7 +3,8 @@ import Icon from '../components/Icon'
 import Modal, { ModalHeader } from '../components/Modal'
 import { useApp } from '../context/AppContext'
 import { ALGO_SETTINGS } from '../utils/matchScore'
-import { apiFetch } from '../utils/api'
+import { apiFetch, pollTask } from '../utils/api'
+import { clearActiveRequestId, setActiveRequestId } from '../utils/requestContext'
 
 const IMPORTANCE_STARS = { 高: '★★★', 中: '★★☆', 低: '★☆☆' }
 
@@ -139,9 +140,21 @@ export default function Requirements() {
       const json = await res.json()
       if (!res.ok || json.code !== 0) throw new Error(json.message || '重算失败')
       const count = json.data?.count ?? 0
-      showToast(count
-        ? `已开始重新计算 ${count} 位候选人的匹配建议与AI得分，解析完成后刷新页面查看`
-        : '该职位暂无需要重算的候选人')
+      const requestId = json.data?.request_id
+      if (!count) {
+        showToast('该职位暂无需要重算的候选人')
+        return
+      }
+      showToast(`已开始重新计算 ${count} 位候选人的匹配建议与AI得分（任务 ${requestId || '-'}）`)
+      // 后台任务：凭 request_id 轮询进度，完成后提示，期间不阻塞页面操作
+      if (requestId) {
+        // 本次 LLM 请求的 request_id 供前端日志带上，与后端结构化日志对应
+        setActiveRequestId(requestId)
+        pollTask(requestId, { interval: 3000, timeout: 900000 })
+          .then(() => showToast(`重算完成（${count} 位候选人）`))
+          .catch((e) => showToast(`重算失败：${e.message}`, 'error'))
+          .finally(() => clearActiveRequestId(requestId))
+      }
     } catch (e) {
       showToast(`触发重算失败：${e.message}`, 'error')
     }
@@ -178,14 +191,23 @@ export default function Requirements() {
   const doGenerate = async () => {
     if (!jdContent.trim()) { showToast('该职位未填写职位要求（JD），无法生成'); return }
     setGenerating(true)
+    let requestId = null
     try {
       const res = await apiFetch(`http://localhost:8080/requirements/${selectedJobId}/generate`, { method: 'POST' })
       const json = await res.json()
       if (!res.ok || json.code !== 0) throw new Error(json.message || json.detail?.[0]?.msg || '生成失败')
-      setGenResult(json.data || [])
+      requestId = json.data?.request_id
+      if (!requestId) throw new Error('未返回任务 id，无法跟踪生成进度')
+      // 本次 LLM 请求的 request_id 供前端日志带上，与后端结构化日志对应
+      setActiveRequestId(requestId)
+      // 后端异步：立即返回 request_id，这里轮询任务状态，成功后展示可编辑的生成结果
+      const task = await pollTask(requestId, { interval: 1500, timeout: 180000 })
+      setGenResult(task.result || [])
+      if (!(task.result || []).length) showToast('生成结果为空，请重试或手动填写')
     } catch (e) {
       showToast(`生成失败：${e.message}`, 'error')
     } finally {
+      clearActiveRequestId(requestId)
       setGenerating(false)
     }
   }

@@ -2,6 +2,7 @@ import json
 
 from sqlalchemy.orm import Session
 
+from ..database import SessionLocal
 from ..repositories import JobRepository, RequirementRepository
 from ..schemas.requirement import (
     RequirementItemCreate,
@@ -40,6 +41,14 @@ class RequirementService:
         """职位存在性校验，不存在抛 RequirementNotFoundError。"""
         if not self.job_repo.get(job_id):
             raise RequirementNotFoundError(f"job {job_id} not found")
+
+    def ensure_jd_available(self, job_id: int) -> None:
+        """JD 前置校验（同步、无 LLM）：职位不存在或 JD 为空时直接快速失败。"""
+        job = self.job_repo.get(job_id)
+        if not job:
+            raise RequirementNotFoundError(f"job {job_id} not found")
+        if not job.description or not job.description.strip():
+            raise RequirementJdEmptyError(f"job {job_id} has no JD")
 
     def generate_from_jd(self, job_id: int) -> list[RequirementItemGen]:
         """基于职位 JD 调用 LLM 生成要求项（仅预览，不落库）。"""
@@ -98,3 +107,12 @@ class RequirementService:
         self.repo.delete_jobfits_by_item(item_id)
         self.repo.delete(item)
         self.repo.commit()
+
+
+def run_generate_preview(job_id: int) -> list[dict]:
+    """后台任务入口：独立会话中生成要求项预览，结果转 dict 供 JSON 落库。"""
+    db = SessionLocal()
+    try:
+        return [i.model_dump() for i in RequirementService(db).generate_from_jd(job_id)]
+    finally:
+        db.close()

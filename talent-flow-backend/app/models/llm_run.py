@@ -9,13 +9,13 @@ from ..database import Base
 class LLMRun(Base):
     """一次模型调用的运行记录：模型、token 用量、耗时与状态。
 
-    trace_id 与请求/后台任务日志对齐，便于把某次操作产生的所有模型调用串起来。
+    request_id 与异步接口返回给前端的 request_id 一致，便于把某次操作产生的所有模型调用串起来。
     """
 
     __tablename__ = "llm_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True, comment="关联的操作 trace id")
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True, comment="关联接口返回给前端的 request_id")
     model: Mapped[str] = mapped_column(String(128), nullable=False, default="-", comment="模型名称")
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="输入 token 数")
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="输出 token 数")

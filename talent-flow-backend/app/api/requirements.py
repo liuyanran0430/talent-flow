@@ -1,5 +1,3 @@
-﻿import uuid
-
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -9,21 +7,21 @@ from ..schemas.requirement import (
     RecalculatePayload,
     RequirementBatchCreate,
     RequirementItemCreate,
-    RequirementItemGen,
     RequirementItemOut,
     RequirementItemUpdate,
 )
+from ..services.async_tasks import create_task, execute_task
 from ..services.recalculate_service import count_recalculable_candidates, recalc_job_candidates
 from ..services.requirement_service import (
-    RequirementGenerateEmptyError,
     RequirementJdEmptyError,
     RequirementNotFoundError,
     RequirementService,
+    run_generate_preview,
 )
 from ..core.logging_config import (
     get_audit_logger,
     get_logger,
-    get_trace_id,
+    set_request_id,
 )
 
 logger = get_logger("requirements")
@@ -44,27 +42,25 @@ def list_items(job_id: int, db: Session = Depends(get_db)):
 
 @router.post(
     "/{job_id}/generate",
-    response_model=ApiResponse[list[RequirementItemGen]],
-    summary="基于职位JD（description）调用LLM生成要求项（仅预览，不落库；确认后经 items/batch 应用）",
+    response_model=ApiResponse[dict],
+    summary="基于职位JD异步调用LLM生成要求项：立即返回 request_id，前端凭该 id 轮询 GET /tasks/{request_id}",
 )
-def generate_from_jd(job_id: int, db: Session = Depends(get_db)):
+def generate_from_jd(job_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    # 前置校验同步完成（不调用 LLM），职位不存在/JD 为空可立即返回错误
     try:
-        items = RequirementService(db).generate_from_jd(job_id)
+        RequirementService(db).ensure_jd_available(job_id)
     except RequirementNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
     except RequirementJdEmptyError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "该职位未填写职位要求（JD），无法生成")
-    except RequirementGenerateEmptyError:
-        logger.warning("JD 生成要求项结果为空 job_id=%s", job_id)
-        audit.warning("要求项生成结果为空 job_id=%s", job_id)
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "JD 解析结果为空，请重试")
-    except Exception as e:
-        logger.exception("JD 生成要求项失败 job_id=%s: %s", job_id, e)
-        audit.error("要求项生成失败 job_id=%s error=%s", job_id, e)
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"JD 解析失败：{e}")
-    logger.info("JD生成要求项成功 job_id=%s items=%s", job_id, len(items))
-    audit.info("要求项生成成功 job_id=%s items=%s names=%s", job_id, len(items), [i.name for i in items])
-    return ApiResponse.ok(items)
+
+    request_id = create_task(db, "requirement_generate")
+    # 触发接口属于 LLM 相关接口，绑定 request_id，本次请求的日志与访问日志都带上它
+    set_request_id(request_id)
+    logger.info("要求项生成任务已入队 job_id=%s request_id=%s", job_id, request_id)
+    audit.info("要求项生成触发 job_id=%s request_id=%s", job_id, request_id)
+    background_tasks.add_task(execute_task, request_id, lambda: run_generate_preview(job_id))
+    return ApiResponse.ok({"request_id": request_id}, message="generating")
 
 
 @router.post(
@@ -84,7 +80,7 @@ def batch_create_items(job_id: int, payload: RequirementBatchCreate, db: Session
 @router.post(
     "/{job_id}/recalculate",
     response_model=ApiResponse[dict],
-    summary="要求配置变化后重算相关候选人：后台重新解析生成匹配建议（jobfits）并按算法参数重算AI得分（matches）",
+    summary="要求配置变化后异步重算：立即返回 request_id，前端凭该 id 轮询 GET /tasks/{request_id}",
 )
 def recalculate_candidates(
     job_id: int,
@@ -100,17 +96,25 @@ def recalculate_candidates(
     count = count_recalculable_candidates(db, job_id)
     if count == 0:
         return ApiResponse.ok({"count": 0}, message="no parsed candidates to recalculate")
-    task_id = uuid.uuid4().hex[:8]
-    logger.info("要求配置重算启动 job_id=%s candidates=%s", job_id, count)
-    audit.info("要求重算触发 job_id=%s candidates=%s", job_id, count)
+
+    request_id = create_task(db, "requirement_recalculate")
+    # 触发接口属于 LLM 相关接口，绑定 request_id，本次请求的日志与访问日志都带上它
+    set_request_id(request_id)
+    params = payload or RecalculatePayload()
+    logger.info("要求配置重算任务已入队 job_id=%s candidates=%s request_id=%s", job_id, count, request_id)
+    audit.info("要求重算触发 job_id=%s candidates=%s request_id=%s", job_id, count, request_id)
     background_tasks.add_task(
-        recalc_job_candidates,
-        job_id,
-        payload or RecalculatePayload(),
-        task_id,
-        get_trace_id(),
+        execute_task,
+        request_id,
+        lambda: _run_recalc(job_id, params, request_id, count),
     )
-    return ApiResponse.ok({"count": count}, message="recalculating")
+    return ApiResponse.ok({"count": count, "request_id": request_id}, message="recalculating")
+
+
+def _run_recalc(job_id: int, params: RecalculatePayload, request_id: str, count: int) -> dict:
+    """后台任务入口：重算完成后把处理人数作为结果落库。"""
+    recalc_job_candidates(job_id, params, request_id=request_id)
+    return {"count": count}
 
 
 @router.post(

@@ -1,4 +1,4 @@
-﻿"""
+"""
 简历解析服务
 
 输入：简历本地路径、职位要求项及判定标准的列表
@@ -30,10 +30,16 @@ from langchain_core.runnables import RunnableLambda
 from pydantic import BaseModel, Field
 
 from ..core.config import settings
+from ..core.logging_config import get_logger, reset_prompt_version, set_prompt_version
 from ..llm import get_model_client
+from ..llm.parse_retry import invoke_with_parse_retry
+
+logger = get_logger("resume-parser")
 
 # 简历文本截断上限，避免超出 LLM 上下文
 MAX_RESUME_CHARS = 8000
+# 要求项列表（含判定标准）截断上限：与简历文本截断同属上下文超限防御
+MAX_REQUIREMENTS_CHARS = 4000
 
 
 # ---------- 输出 Schema（输出校验依据） ----------
@@ -162,7 +168,8 @@ def preprocess(payload: dict) -> dict:
 
     return {
         "resume_text": text[:MAX_RESUME_CHARS],
-        "requirements_text": "\n".join(req_lines) or "（无要求项）",
+        # 要求项列表同样截断：超长要求清单不至于把 prompt 顶出上下文窗口
+        "requirements_text": ("\n".join(req_lines) or "（无要求项）")[:MAX_REQUIREMENTS_CHARS],
     }
 
 
@@ -257,6 +264,9 @@ def parse_resume(resume_path: str, requirements: list) -> str:
     """
     对外接口
 
+    JSON 解析失败（模型输出不合规）时自动重试一次；再失败抛出原异常，
+    由调用方降级转人工：resume_tasks.run_parse 捕获后置 status=review 等待 HR 手动补全。
+
     :param resume_path: 简历本地路径（支持 pdf/docx/txt/md）
     :param requirements: 职位要求项列表，元素为 dict（含 name、standard）或对象（含 .name/.standard 属性）
     :return: 结构化 JSON 字符串，含 basic（基本信息）与 suggestions（职位匹配建议列表）
@@ -265,9 +275,17 @@ def parse_resume(resume_path: str, requirements: list) -> str:
         (r.get("name") if isinstance(r, dict) else getattr(r, "name", "")) or ""
         for r in requirements
     ]
-    return build_chain(requirement_names).invoke(
-        {"resume_path": resume_path, "requirements": requirements}
-    )
+    # 标记本次使用的提示词版本，写入 LLM 结构化日志，便于定位「当时用的是哪一版」
+    prompt_token = set_prompt_version("resume_parse/v1")
+    try:
+        return invoke_with_parse_retry(
+            build_chain(requirement_names),
+            {"resume_path": resume_path, "requirements": requirements},
+            logger=logger,
+            tag="简历解析",
+        )
+    finally:
+        reset_prompt_version(prompt_token)
 
 
 # if __name__ == "__main__":
