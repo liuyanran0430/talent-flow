@@ -58,7 +58,7 @@ talent-flow-backend/
 
 ### 数据表（`init_db()` 启动时自动 `create_all`）
 
-`departments`、`jobs`、`requirement_items`、`requirement_templates`、`template_items`、`candidates`、`jobfits`、`matches`。无迁移工具，模型变更需自行处理已有库结构。
+`departments`、`jobs`、`requirement_items`、`requirement_templates`、`template_items`、`candidates`、`jobfits`、`matches`、`kb_standards`、`llm_runs`、`async_tasks`。无迁移工具，模型变更需自行处理已有库结构；知识库相关变更可用 `python scripts/migrate_kb.py` 幂等补齐。
 
 ---
 
@@ -118,6 +118,15 @@ cp .env.example .env
 | `LLM_MAX_RETRIES` | `3` | 可重试错误最大重试次数（总尝试 = 1 + 该值），退避 1s/2s/4s |
 | `LLM_RETRY_INITIAL_WAIT` / `LLM_RETRY_MAX_WAIT` | `1.0` / `10.0` | 退避起始/单次最长等待秒数 |
 | `LLM_RETRY_JITTER` | `0.0` | 退避随机抖动（秒）；0 = 严格 1s/2s/4s |
+| `RAG_ENABLED` | `true` | 岗位标准知识库开关；`false` 时检索直接返回空，走纯 LLM |
+| `RAG_TOP_K` | `3` | 单次检索注入 Prompt 的标准条目上限 |
+| `RAG_MIN_SCORE` | `0.60` | 向量相似度阈值（cosine：`1 - distance`），低于阈值不注入 |
+| `EMBEDDING_MODEL` | `text-embedding-v4` | DashScope 向量模型 |
+| `EMBEDDING_API_BASE` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | DashScope OpenAI 兼容端点 |
+| `EMBEDDING_API_KEY` | 空 | DashScope API Key；为空时知识库仅可维护，检索自动降级 |
+| `VECTOR_STORE_BACKEND` | `chroma` | 向量库实现；置为其他值使用空实现（完全禁用检索） |
+| `VECTOR_STORE_PATH` | `data/vector_store` | Chroma 本地持久化目录 |
+| `RAG_REBUILD_BATCH` | `32` | 全量重建索引时的批量向量化条数 |
 
 > 未配置 LLM 时服务仍可启动，但「生成要求项」「简历解析」会失败。
 
@@ -129,6 +138,39 @@ cp .env.example .env
 | 超时 | 响应迟迟不返回 | `LLM_TIMEOUT` 硬超时 + 重试上限 |
 | 上下文超限 | Prompt 过长被拒 | 不重试；预处理阶段截断输入（简历 8000 / JD 6000 / 要求项 4000 字符）+ `LLM_MAX_TOKENS` 输出上限 |
 | JSON 解析失败 | 模型输出不合规 | 重试一次（`app/llm/parse_retry.py`）；再失败降级转人工：简历解析置 `review` 待 HR 补全，JD 生成返回错误由 HR 手动填写 |
+
+### 岗位标准知识库（RAG）
+
+方案全文见 `docs/岗位标准知识库方案.md`，这里只列运行操作。
+
+- 存储：MySQL `kb_standards` 为唯一事实源；Chroma 向量索引落在 `data/vector_store/`，可随时重建。
+- Embedding：DashScope `text-embedding-v4`（OpenAI 兼容端点），需在 `.env` 配置 `EMBEDDING_API_KEY`。
+- 降级：未配置密钥或向量库异常时，检索返回空并记录告警，JD 生成/简历解析自动回退纯 LLM，不阻断主流程。
+
+已有数据库需执行一次迁移（新建 `kb_standards` 表并为 `requirement_items` 加 `standard_id`，幂等可重复执行）：
+
+```bash
+python scripts/migrate_kb.py
+```
+
+初始化与索引维护：
+
+```bash
+# 1. 把历史要求项沉淀为标准草稿（同名/别名自动跳过，分类按规则推断）
+curl -X POST http://localhost:8080/kb/import/requirements -H "Content-Type: application/json" -d "{\"limit\": 200}"
+# 2. HR 补充判定标准/证据要求后发布（发布即写入向量库）
+curl -X POST http://localhost:8080/kb/standards/1/publish
+# 3. 全量重建索引（换 embedding 模型或数据迁移后执行）
+curl -X POST http://localhost:8080/kb/reindex
+# 4. 检索自测
+curl "http://localhost:8080/kb/search?q=Python&top_k=5"
+```
+
+在线链路：
+- JD 生成前用 JD 全文检索已发布标准（Top-K + 相似度阈值 + 名称/别名加权），注入 Prompt 作为参考；
+- LLM 回填的 `standard_id` 必须属于本次注入集合，否则置空（防编造来源）；
+- 简历解析按 `requirement_items.standard_id` 直接取标准，注入「判定标准 + 证据要求」；
+- 命中的标准 id 写入 LLM 结构化日志的 `retrieval_ids`，可回溯判定依据。
 
 ---
 
@@ -237,6 +279,11 @@ DATABASE_URL=sqlite:///./local.db
 | | `POST /templates/{id}/apply` | 应用模板到职位 |
 | | `POST /templates/{id}/items`、`PUT/DELETE /templates/items/{item_id}` | 模板要求项 |
 | 日志 | `POST /logs/frontend` | 接收前端 warn/error 日志 |
+| 岗位标准知识库 | `GET/POST /kb/standards`、`GET/PUT/DELETE /kb/standards/{id}` | 标准条目 CRUD（`q`/`category`/`status` 过滤） |
+| | `POST /kb/standards/{id}/publish`、`POST /kb/standards/{id}/archive` | 发布（写入向量库）/ 归档（移除向量） |
+| | `GET /kb/search?q=&top_k=` | 语义检索已发布标准（未配 embedding key 时 `degraded=true`） |
+| | `POST /kb/import/requirements` | 历史要求项沉淀为草稿（同名去重） |
+| | `POST /kb/reindex` | 全量重建向量索引 |
 
 请求体/响应字段详见 `/docs` 或仓库根目录的 [openapi.yaml](file:///e:/AI全栈/workspace/talent-flow/talent-flow-backend/openapi.yaml)。
 

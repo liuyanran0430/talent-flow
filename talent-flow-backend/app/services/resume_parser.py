@@ -164,7 +164,15 @@ def preprocess(payload: dict) -> dict:
         standard = (
             r.get("standard") if isinstance(r, dict) else getattr(r, "standard", None)
         ) or "（无判定标准）"
-        req_lines.append(f"{i}. {name}：{standard}")
+        line = f"{i}. {name}：{standard}"
+        # 岗位标准知识库注入：判定标准与证据要求来自已发布标准条目
+        extra = r.get("standard_ref") if isinstance(r, dict) else None
+        evidence = r.get("required_evidence") if isinstance(r, dict) else None
+        if extra:
+            line += f"（岗位标准判定：{extra}）"
+        if evidence:
+            line += f"（需证明材料：{evidence}）"
+        req_lines.append(line)
 
     return {
         "resume_text": text[:MAX_RESUME_CHARS],

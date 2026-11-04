@@ -15,9 +15,10 @@
 
 LLM 结构化日志格式（llm，逐行 JSON）：
     {"request_id": "...", "user_id": null, "session_id": "...", "model": "...",
-     "prompt_version": "...", "retrieval_ids": [], "tool_calls": [],
+     "prompt_version": "...", "retrieval_ids": ["标准 id"], "tool_calls": [],
      "latency_ms": 123, "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30,
      "error_type": null, "status": "success"}
+retrieval_ids 未接入检索时为空数组，接入后由解析器在注入 Prompt 前绑定。
 """
 import json
 import logging
@@ -37,6 +38,8 @@ session_id_var: ContextVar[str] = ContextVar("session_id", default="-")
 user_id_var: ContextVar[str] = ContextVar("user_id", default="-")
 # Prompt 版本：由解析器在调用 LLM 前绑定，便于定位「当时用的是哪一版提示词」
 prompt_version_var: ContextVar[str] = ContextVar("prompt_version", default="-")
+# 检索命中的标准/知识 chunk id：由解析器在注入 Prompt 前绑定，写入 LLM 结构化日志
+retrieval_ids_var: ContextVar[str] = ContextVar("retrieval_ids", default="")
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-7s | request_id=%(request_id)s | %(name)s | %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -100,6 +103,20 @@ def reset_prompt_version(token) -> None:
 
 def get_prompt_version() -> str:
     return prompt_version_var.get()
+
+
+def set_retrieval_ids(ids: list[str] | list[int]):
+    """绑定本次注入 Prompt 的检索结果 id（岗位标准 / 知识 chunk），返回 token"""
+    return retrieval_ids_var.set(",".join(str(i) for i in ids))
+
+
+def reset_retrieval_ids(token) -> None:
+    _reset(retrieval_ids_var, token)
+
+
+def get_retrieval_ids() -> list[str]:
+    raw = retrieval_ids_var.get()
+    return [item for item in raw.split(",") if item] if raw else []
 
 
 class ContextFilter(logging.Filter):

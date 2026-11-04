@@ -14,7 +14,7 @@ from .core.logging_config import (
     set_user_id,
     setup_logging,
 )
-from .api import candidates, departments, jobfits, jobs, logs, matches, requirements, resumes, tasks, templates
+from .api import candidates, departments, jobfits, jobs, kb, logs, matches, requirements, resumes, tasks, templates
 from .schemas.common import ApiResponse
 
 # 模块导入即初始化：uvicorn --reload 启动/热重载后自动生效，日志写入 logs/ 目录
@@ -33,6 +33,7 @@ TAGS_METADATA = [
     {"name": "matches", "description": "岗位匹配打分：岗位与候选人的匹配分维护"},
     {"name": "logs", "description": "日志：接收前端上报的异常日志并落盘"},
     {"name": "tasks", "description": "异步任务：LLM 接口返回 request_id，凭该 id 轮询处理状态与结果"},
+    {"name": "kb", "description": "岗位标准知识库：标准条目维护、发布向量化、检索与索引重建"},
 ]
 
 
@@ -140,3 +141,4 @@ app.include_router(matches.router)
 app.include_router(templates.router)
 app.include_router(logs.router)
 app.include_router(tasks.router)
+app.include_router(kb.router)

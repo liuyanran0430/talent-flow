@@ -3,6 +3,7 @@ from .candidate import Candidate
 from .department import Department
 from .job import Job
 from .jobfit import JobFit
+from .kb_standard import KbStandard
 from .llm_run import LLMRun
 from .match import Match
 from .requirement import RequirementItem
@@ -21,4 +22,5 @@ __all__ = [
     "JobFit",
     "Match",
     "LLMRun",
+    "KbStandard",
 ]

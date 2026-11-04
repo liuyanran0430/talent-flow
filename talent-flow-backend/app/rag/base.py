@@ -10,6 +10,10 @@ class VectorStoreClient(Protocol):
         """写入/更新一条向量文档。"""
         ...
 
+    def upsert_many(self, namespace: str, items: list[dict[str, Any]]) -> None:
+        """批量写入/更新向量文档，items 为 [{doc_id, text, metadata}]。"""
+        ...
+
     def search(self, namespace: str, query: str, top_k: int = 5) -> list[dict[str, Any]]:
         """语义检索，返回 [{doc_id, text, metadata, score}, ...]。"""
         ...

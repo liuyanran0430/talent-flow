@@ -12,14 +12,43 @@ from ..core.logging_config import (
     get_audit_logger,
     get_logger,
     reset_request_id,
+    reset_retrieval_ids,
     set_request_id,
+    set_retrieval_ids,
 )
-from ..repositories import CandidateRepository, JobFitRepository, RequirementRepository
+from ..repositories import (
+    CandidateRepository,
+    JobFitRepository,
+    KbStandardRepository,
+    RequirementRepository,
+)
 from ..models.jobfit import JobFit
 from .resume_parser import parse_resume
 
 logger = get_logger("resumes")
 audit = get_audit_logger("resume")
+
+
+def _enrich_requirements_with_standards(db, reqs) -> tuple[list[dict], list[int]]:
+    """把要求项转换为解析器入参，并注入关联标准条目的判定标准与证据要求。
+
+    :return: (解析器入参列表, 本次实际注入的标准 id 列表)；标准 id 会写入 LLM 结构化日志 retrieval_ids
+    """
+    ids = [r.standard_id for r in reqs if r.standard_id]
+    standards = (
+        {s.id: s for s in KbStandardRepository(db).list_published_by_ids(ids)} if ids else {}
+    )
+    payload: list[dict] = []
+    used_ids: list[int] = []
+    for req in reqs:
+        item: dict = {"name": req.name, "standard": req.standard}
+        standard = standards.get(req.standard_id) if req.standard_id else None
+        if standard:
+            item["standard_ref"] = standard.standard
+            item["required_evidence"] = standard.required_evidence
+            used_ids.append(standard.id)
+        payload.append(item)
+    return payload, used_ids
 
 
 def run_parse(
@@ -55,9 +84,14 @@ def run_parse(
 
         # 该职位的要求项（含判定标准），作为匹配依据
         reqs = req_repo.list_by_job(job_id) if job_id else []
+        req_payload, standard_ids = _enrich_requirements_with_standards(db, reqs)
 
         try:
-            result = json.loads(parse_resume(resume.resume_path, reqs))
+            retrieval_token = set_retrieval_ids(standard_ids)
+            try:
+                result = json.loads(parse_resume(resume.resume_path, req_payload))
+            finally:
+                reset_retrieval_ids(retrieval_token)
         except Exception as e:
             logger.exception("简历解析失败 candidate_id=%s: %s", candidate_id, e)
             audit.error(

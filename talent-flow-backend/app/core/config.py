@@ -39,6 +39,17 @@ class Settings(BaseSettings):
     OCR_ENABLED: bool = True
     OCR_MIN_CHARS: int = 50
 
+    # ---------- RAG / 岗位标准知识库 ----------
+    RAG_ENABLED: bool = True  # 关闭后所有检索直接返回空，走纯 LLM 降级链路
+    RAG_TOP_K: int = 3  # 每次检索返回的标准条数
+    RAG_MIN_SCORE: float = 0.60  # 相似度阈值，低于该值的召回结果丢弃
+    EMBEDDING_MODEL: str = "text-embedding-v4"  # DashScope 向量模型
+    EMBEDDING_API_BASE: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    EMBEDDING_API_KEY: str | None = None  # 未配置时 RAG 自动降级，不影响主流程
+    VECTOR_STORE_BACKEND: str = "chroma"  # chroma / null
+    VECTOR_STORE_PATH: str = "data/vector_store"  # 本地向量持久化目录
+    RAG_REBUILD_BATCH: int = 32  # 重建索引时每批向量化的条数
+
     @property
     def database_url(self) -> str:
         if self.DATABASE_URL:

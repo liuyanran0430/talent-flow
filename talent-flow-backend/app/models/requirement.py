@@ -17,5 +17,11 @@ class RequirementItem(Base):
     type: Mapped[str] = mapped_column(String(16), default="必须", comment="必须/加分")
     importance: Mapped[str] = mapped_column(String(16), default="高", comment="高/中/低")
     standard: Mapped[str | None] = mapped_column(Text, nullable=True, comment="判定标准")
+    standard_id: Mapped[int | None] = mapped_column(
+        ForeignKey("kb_standards.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="关联的岗位标准条目 id，用于追溯判定依据",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

@@ -3,6 +3,7 @@ from .candidate_repository import CandidateRepository
 from .department_repository import DepartmentRepository
 from .job_repository import JobRepository
 from .jobfit_repository import JobFitRepository
+from .kb_standard_repository import KbStandardRepository
 from .match_repository import MatchRepository
 from .requirement_repository import RequirementRepository
 from .resume_repository import ResumeRepository
@@ -14,6 +15,7 @@ __all__ = [
     "DepartmentRepository",
     "JobRepository",
     "JobFitRepository",
+    "KbStandardRepository",
     "MatchRepository",
     "RequirementRepository",
     "ResumeRepository",

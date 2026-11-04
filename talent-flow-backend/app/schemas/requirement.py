@@ -9,6 +9,7 @@ class RequirementItemBase(BaseModel):
     type: str = Field("必须", description="必须/加分")
     importance: str = Field("高", description="高/中/低")
     standard: str | None = Field(None, description="判定标准")
+    standard_id: int | None = Field(None, description="关联的岗位标准条目 id（可追溯判定依据）")
 
 
 class RequirementItemCreate(RequirementItemBase):
@@ -20,6 +21,7 @@ class RequirementItemUpdate(BaseModel):
     type: str | None = None
     importance: str | None = None
     standard: str | None = None
+    standard_id: int | None = None
 
 
 class RequirementItemOut(RequirementItemBase):
@@ -36,6 +38,7 @@ class RequirementItemGen(BaseModel):
     type: str = Field("必须", description="必须/加分")
     importance: str = Field("中", description="高/中/低")
     standard: str | None = Field(None, description="判定标准")
+    standard_id: int | None = Field(None, description="命中的岗位标准条目 id")
 
 
 class RequirementBatchCreate(BaseModel):

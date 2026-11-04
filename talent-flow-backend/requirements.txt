@@ -12,6 +12,10 @@ langchain-openai==1.6.0
 pypdf==6.16.2
 PyYAML==6.0.3
 
+# ---------- RAG / 岗位标准知识库（向量库 + 数值计算） ----------
+chromadb==1.5.9
+numpy==2.5.4
+
 # ---------- OCR 兜底（可选，未安装时静默降级，不影响 PDF/docx/txt/md 解析） ----------
 # rapidocr-onnxruntime  轻量 ONNX 运行时，PaddleOCR 同款中文识别模型，CPU 即可运行
 # pymupdf               将扫描版 PDF 渲染为图像（仅 OCR PDF 时用到）

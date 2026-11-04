@@ -2,6 +2,7 @@ import json
 
 from sqlalchemy.orm import Session
 
+from ..core.logging_config import get_logger
 from ..database import SessionLocal
 from ..repositories import JobRepository, RequirementRepository
 from ..schemas.requirement import (
@@ -11,6 +12,9 @@ from ..schemas.requirement import (
     RequirementItemUpdate,
 )
 from .jd_parser import parse_jd
+from .kb_service import retrieve_standards
+
+logger = get_logger("requirements")
 
 
 class RequirementNotFoundError(Exception):
@@ -31,6 +35,7 @@ class RequirementGenerateEmptyError(Exception):
 
 class RequirementService:
     def __init__(self, db: Session) -> None:
+        self.db = db
         self.repo = RequirementRepository(db)
         self.job_repo = JobRepository(db)
 
@@ -57,7 +62,13 @@ class RequirementService:
             raise RequirementNotFoundError(f"job {job_id} not found")
         if not job.description or not job.description.strip():
             raise RequirementJdEmptyError(f"job {job_id} has no JD")
-        data = json.loads(parse_jd(job.description))
+        # 岗位标准知识库检索：命中则注入 Prompt 作为参考，未命中/检索异常自动降级为纯 LLM
+        standards = retrieve_standards(self.db, job.description)
+        logger.info(
+            "要求项生成检索岗位标准 job_id=%s hits=%s ids=%s",
+            job_id, len(standards), [s["id"] for s in standards],
+        )
+        data = json.loads(parse_jd(job.description, standards))
         items = [RequirementItemGen(**it) for it in data.get("items", [])]
         if not items:
             raise RequirementGenerateEmptyError(f"job {job_id} generated no items")
@@ -71,7 +82,13 @@ class RequirementService:
         created = self.repo.bulk_create(
             job_id,
             [
-                {"name": it.name.strip(), "type": it.type, "importance": it.importance, "standard": it.standard}
+                {
+                    "name": it.name.strip(),
+                    "type": it.type,
+                    "importance": it.importance,
+                    "standard": it.standard,
+                    "standard_id": it.standard_id,
+                }
                 for it in items
             ],
         )
