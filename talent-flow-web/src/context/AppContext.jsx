@@ -10,6 +10,7 @@ export const SECTIONS = [
   { key: 'import', label: '导入简历', icon: 'solar:upload-outline' },
   { key: 'candidates', label: '候选人管理', icon: 'solar:document-text-outline' },
   { key: 'report', label: '职位匹配看板', icon: 'solar:chart-square-outline' },
+  { key: 'qa', label: '招聘知识问答', icon: 'solar:question-circle-outline' },
 ]
 
 function Toast({ text, visible }) {

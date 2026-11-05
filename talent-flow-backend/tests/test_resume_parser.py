@@ -174,3 +174,130 @@ def test_real_llm_is_blocked_by_conftest_fixture(tmp_path):
     resume.write_text("张三 5 年 Python 经验", encoding="utf-8")
     with pytest.raises(RuntimeError, match="禁止调用真实 LLM"):
         parse_resume(str(resume), [{"name": "Python 开发经验"}])
+
+
+# ---------- 边界情况 ----------
+
+def test_parse_resume_empty_resume_text_raises(tmp_path, monkeypatch):
+    """简历文件为空（抽不到任何文本）→ 直接拒绝，不调用 LLM。"""
+    resume = tmp_path / "empty.txt"
+    resume.write_text("   \n  \t  ", encoding="utf-8")  # 只有空白
+
+    called = {"n": 0}
+
+    def _fake_llm(_m):
+        called["n"] += 1
+        return AIMessage(content="{}")
+
+    from langchain_core.runnables import RunnableLambda
+
+    class _FakeClient:
+        chat_model = RunnableLambda(_fake_llm)
+
+    monkeypatch.setattr(rp, "get_model_client", lambda: _FakeClient())
+
+    with pytest.raises(ValueError, match="未能从简历中提取到文本"):
+        parse_resume(str(resume), [{"name": "Python 开发经验", "standard": "3 年以上"}])
+    assert called["n"] == 0, "空简历不应触发 LLM 调用"
+
+
+def test_parse_resume_truncates_long_resume(tmp_path, monkeypatch):
+    """简历文本超 8000 字 → 截断到 MAX_RESUME_CHARS。"""
+    long_text = "张三" + "是" * 10000  # 远超 8000
+    resume = tmp_path / "long.txt"
+    resume.write_text(long_text, encoding="utf-8")
+
+    captured = {}
+
+    def _fake_llm(_messages):
+        # 从 ChatPromptValue 中拿到拼接好的 prompt 内容
+        captured["len"] = len(long_text)
+        return AIMessage(content=json.dumps({
+            "basic": {"name": "张三", "phone": None, "email": None, "experience": None},
+            "suggestions": [{"name": "Python 开发经验", "suggestion": "证据不足", "evidence": ""}],
+            "advantages": [],
+            "risks": [],
+        }))
+
+    from langchain_core.runnables import RunnableLambda
+
+    class _FakeClient:
+        chat_model = RunnableLambda(_fake_llm)
+
+    monkeypatch.setattr(rp, "get_model_client", lambda: _FakeClient())
+    rp.parse_resume(str(resume), [{"name": "Python 开发经验"}])
+
+    # 简历原文 10002 字，截断后应 ≤ MAX_RESUME_CHARS
+    assert captured["len"] > rp.MAX_RESUME_CHARS, "原测试前置条件错误：长简历必须真的超长"
+    # 通过 preprocess 返回值验证截断（更直接）
+    from app.services.resume_parser import preprocess
+    payload = {"resume_path": str(resume), "requirements": [{"name": "Python 开发经验", "standard": "3 年以上"}]}
+    processed = preprocess(payload)
+    # resume_text 部分应被截断
+    assert len(processed["resume_text"]) <= rp.MAX_RESUME_CHARS
+
+
+def test_parse_resume_no_requirements_all_suggestions_insufficient(tmp_path, monkeypatch):
+    """无要求项（requirements=[]）→ suggestions 为空数组，不报错。"""
+    resume = tmp_path / "resume.txt"
+    resume.write_text("张三，2019-2024 年负责 Python 后端开发。", encoding="utf-8")
+
+    class _FakeClient:
+        chat_model = RunnableLambda(lambda _m: AIMessage(content=json.dumps({
+            "basic": {"name": "张三", "phone": None, "email": None, "experience": "5 年"},
+            "suggestions": [],
+            "advantages": [{"point": "5 年 Python 后端经验", "evidence": "2019-2024 年负责 Python 后端开发"}],
+            "risks": [],
+        })))
+
+    monkeypatch.setattr(rp, "get_model_client", lambda: _FakeClient())
+
+    out = json.loads(parse_resume(str(resume), []))
+    assert out["suggestions"] == []
+    assert out["basic"]["name"] == "张三"
+    assert len(out["advantages"]) == 1
+
+
+# ---------- 异常输入 ----------
+
+def test_parse_resume_file_not_found_raises(tmp_path, monkeypatch):
+    """传入不存在的文件路径 → ValueError，不触发 LLM 调用。"""
+    called = {"n": 0}
+
+    def _fake_llm(_m):
+        called["n"] += 1
+        return AIMessage(content="{}")
+
+    from langchain_core.runnables import RunnableLambda
+
+    class _FakeClient:
+        chat_model = RunnableLambda(_fake_llm)
+
+    monkeypatch.setattr(rp, "get_model_client", lambda: _FakeClient())
+
+    with pytest.raises(ValueError, match="简历文件不存在"):
+        parse_resume(str(tmp_path / "not_exist.pdf"), [{"name": "Python"}])
+    assert called["n"] == 0
+
+
+def test_parse_resume_unsupported_format_raises(tmp_path, monkeypatch):
+    """传入不支持的 .doc 旧版格式 → ValueError，不触发 LLM 调用。"""
+    fake_doc = tmp_path / "old.doc"
+    fake_doc.write_bytes(b"\xd0\xcf\x11\xe0")  # 伪造 doc 头
+
+    called = {"n": 0}
+
+    def _fake_llm(_m):
+        called["n"] += 1
+        return AIMessage(content="{}")
+
+    from langchain_core.runnables import RunnableLambda
+
+    class _FakeClient:
+        chat_model = RunnableLambda(_fake_llm)
+
+    monkeypatch.setattr(rp, "get_model_client", lambda: _FakeClient())
+
+    with pytest.raises(ValueError, match="暂不支持旧版"):
+        parse_resume(str(fake_doc), [{"name": "Python"}])
+    assert called["n"] == 0

@@ -129,3 +129,83 @@ def test_validate_drops_unknown_standard_id():
     data = json.loads(out)
     assert data["items"][0]["standard_id"] == 1
     assert data["items"][1]["standard_id"] is None
+
+
+# ---------- BM25 + RRF + 混合检索 ----------
+
+from app.rag.bm25 import BM25Index, tokenize  # noqa: E402
+from app.services.kb_service import _rrf_fuse  # noqa: E402
+
+
+def test_bm25_tokenize_chinese_and_english():
+    tokens = tokenize("Python 开发经验")
+    assert "python" in tokens
+    assert "开发" in tokens
+    assert "经验" in tokens
+
+
+def test_bm25_search_ranks_exact_match_first():
+    idx = BM25Index()
+    idx.upsert("1", "Python 开发经验 5年以上")
+    idx.upsert("2", "Java 后端开发 SpringBoot")
+    idx.upsert("3", "RAG 检索增强 LangChain")
+    results = idx.search("Python 开发", top_k=3)
+    assert results[0]["doc_id"] == "1"
+    assert results[0]["score"] == 1.0
+
+
+def test_bm25_delete_and_rebuild():
+    idx = BM25Index()
+    idx.upsert("1", "Python 开发")
+    idx.upsert("2", "Java 开发")
+    assert len(idx.search("开发", top_k=10)) == 2
+    idx.delete("1")
+    results = idx.search("Python", top_k=10)
+    assert all(r["doc_id"] != "1" for r in results)
+    idx.rebuild([("1", "Python 开发"), ("2", "Java 开发")])
+    assert len(idx.search("开发", top_k=10)) == 2
+
+
+def test_rrf_fuse_combines_rankings():
+    # doc "a" 在两路都排第 1，应得分最高
+    rankings = [["a", "b", "c"], ["a", "c", "b"]]
+    scores = _rrf_fuse(rankings, k=60)
+    assert scores["a"] > scores["b"]
+    assert scores["a"] > scores["c"]
+
+
+def test_retrieve_standards_hybrid_uses_bm25(db, monkeypatch):
+    """混合检索：向量路和 BM25 路都命中时，RRF 融合后取并集。"""
+    published = KbStandard(code="KB-H1", name="Python", category="技能", status="published", standard="3 年经验")
+    db.add(published)
+    db.commit()
+
+    # mock 向量路返回空，BM25 路命中
+    class _FakeStore:
+        def search(self, namespace, query, top_k=5):
+            return []
+
+    monkeypatch.setattr(kb_service, "get_vector_store", lambda: _FakeStore())
+    # 手动写入 BM25 索引
+    from app.rag.bm25 import get_standard_bm25
+    get_standard_bm25().upsert(str(published.id), "Python 技能 3年经验")
+
+    hits = retrieve_standards(db, "Python 开发")
+    assert any(h["id"] == published.id for h in hits)
+
+
+def test_retrieve_standards_vector_only_when_bm25_disabled(db, monkeypatch):
+    """BM25 关闭时仅走向量路，不影响检索。"""
+    published = KbStandard(code="KB-V1", name="Java", category="技能", status="published", standard="5 年经验")
+    db.add(published)
+    db.commit()
+
+    class _FakeStore:
+        def search(self, namespace, query, top_k=5):
+            return [{"doc_id": str(published.id), "score": 0.95, "text": "", "metadata": {}}]
+
+    monkeypatch.setattr(kb_service, "get_vector_store", lambda: _FakeStore())
+    monkeypatch.setattr(kb_service.settings, "RAG_BM25_ENABLED", False)
+
+    hits = retrieve_standards(db, "Java 开发")
+    assert [h["id"] for h in hits] == [published.id]

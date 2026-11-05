@@ -7,6 +7,7 @@ MySQL 为唯一事实源，向量库为派生索引：
 
 import json
 import uuid
+from collections import defaultdict
 
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ from ..core.config import settings
 from ..core.logging_config import get_logger
 from ..models import KbStandard
 from ..rag import get_vector_store
+from ..rag.bm25 import bm25_search_standards, get_standard_bm25
 from ..repositories import KbStandardRepository
 from ..schemas.kb import (
     KbImportRequest,
@@ -88,18 +90,24 @@ def standard_to_metadata(standard: KbStandard) -> dict:
 
 
 def index_standard(standard: KbStandard) -> bool:
-    """把单条已发布标准写入向量库；失败只告警，返回 False。"""
+    """把单条已发布标准写入向量库与 BM25 索引；失败只告警，返回 False。"""
+    text = standard_to_text(standard)
     try:
         get_vector_store().upsert(
             STANDARD_NAMESPACE,
             str(standard.id),
-            standard_to_text(standard),
+            text,
             standard_to_metadata(standard),
         )
-        return True
     except Exception as e:
         logger.warning("岗位标准向量化失败 standard_id=%s error=%s", standard.id, e)
         return False
+    # 同步写入 BM25 内存索引
+    try:
+        get_standard_bm25().upsert(str(standard.id), text)
+    except Exception as e:
+        logger.warning("岗位标准 BM25 索引失败 standard_id=%s error=%s", standard.id, e)
+    return True
 
 
 def remove_standard_from_index(standard_id: int) -> None:
@@ -107,6 +115,10 @@ def remove_standard_from_index(standard_id: int) -> None:
         get_vector_store().delete(STANDARD_NAMESPACE, str(standard_id))
     except Exception as e:
         logger.warning("岗位标准向量删除失败 standard_id=%s error=%s", standard_id, e)
+    try:
+        get_standard_bm25().delete(str(standard_id))
+    except Exception as e:
+        logger.warning("岗位标准 BM25 删除失败 standard_id=%s error=%s", standard_id, e)
 
 
 class KbStandardService:
@@ -248,7 +260,7 @@ class KbStandardService:
 
     # ---------- 索引 ----------
     def reindex(self) -> KbReindexResult:
-        """全量重建：清空集合后把所有已发布标准重新向量化。"""
+        """全量重建：清空集合后把所有已发布标准重新向量化，并重建 BM25 索引。"""
         standards = self.repo.list_published()
         if not settings.RAG_ENABLED:
             return KbReindexResult(total=len(standards), degraded=True)
@@ -266,6 +278,11 @@ class KbStandardService:
                 for s in standards
             ]
             store.upsert_many(STANDARD_NAMESPACE, items)
+            # 同步重建 BM25 内存索引
+            try:
+                get_standard_bm25().rebuild([(str(s.id), standard_to_text(s)) for s in standards])
+            except Exception as e:
+                logger.warning("BM25 索引重建失败：%s", e)
             for s in standards:
                 s.embedding_model = settings.EMBEDDING_MODEL
             self.repo.commit()
@@ -296,52 +313,114 @@ class KbStandardService:
         )
 
 
+def _rrf_fuse(rankings: list[list[str]], k: int = 60) -> dict[str, float]:
+    """RRF 融合：rankings 为各路 doc_id 排名列表，返回 {doc_id: fused_score}。
+
+    公式：score(d) = Σ 1 / (k + rank_i(d))，rank 从 0 开始。
+    """
+    scores: dict[str, float] = defaultdict(float)
+    for ranking in rankings:
+        for rank, doc_id in enumerate(ranking):
+            scores[doc_id] += 1.0 / (k + rank + 1)
+    return scores
+
+
+def _field_match_score(standard: KbStandard, query_lower: str) -> float:
+    """规则 rerank 的字段匹配信号，返回 [0, 1]。
+
+    - 标准名称精确出现在 query 中：+0.3
+    - 别名出现在 query 中：+0.2
+    - 分类关键词出现在 query 中：+0.1
+    """
+    score = 0.0
+    names = [standard.name, *_aliases(standard)]
+    if any(name and name.lower() in query_lower for name in names):
+        score += 0.3
+    if standard.category and standard.category.lower() in query_lower:
+        score += 0.1
+    return min(1.0, score)
+
+
 def retrieve_standards(
     db: Session, query: str, top_k: int | None = None
 ) -> list[dict]:
-    """检索已发布标准，返回 [{id, code, name, standard, required_evidence, score}]。
+    """混合检索已发布标准：向量检索 + BM25 关键词检索，RRF 融合后规则 rerank。
 
-    任一环节失败（未配置密钥、向量库异常）都返回空列表并告警，调用方按纯 LLM 降级。
+    返回 [{id, code, name, standard, required_evidence, score}]。
+    任一环节失败（向量库/BM25 异常）都降级为单路检索，不阻断主流程。
     """
     if not settings.RAG_ENABLED:
         return []
     top_k = top_k or settings.RAG_TOP_K
     if top_k <= 0:
         return []
-    try:
-        raw_hits = get_vector_store().search(STANDARD_NAMESPACE, query, top_k=top_k * 2)
-    except Exception as e:
-        logger.warning("岗位标准检索失败，降级为纯 LLM：%s", e)
-        return []
-
-    ids: list[int] = []
-    for hit in raw_hits:
-        try:
-            ids.append(int(hit.get("doc_id")))
-        except (TypeError, ValueError):
-            continue
-    if not ids:
-        return []
-
-    repo = KbStandardRepository(db)
-    published = {s.id: s for s in repo.list_published_by_ids(ids)}
+    pool = max(top_k, settings.RAG_CANDIDATE_POOL)
     query_lower = query.lower()
+
+    # ---------- 1. 两路召回 ----------
+    vector_hits: list[dict] = []
+    try:
+        vector_hits = get_vector_store().search(STANDARD_NAMESPACE, query, top_k=pool)
+    except Exception as e:
+        logger.warning("向量检索失败，仅走 BM25：%s", e)
+
+    bm25_hits: list[dict] = []
+    if settings.RAG_BM25_ENABLED:
+        bm25_hits = bm25_search_standards(query, top_k=pool)
+
+    # 两路皆空则直接返回
+    if not vector_hits and not bm25_hits:
+        return []
+
+    # ---------- 2. RRF 融合（按 doc_id 排名） ----------
+    vector_rank = [h["doc_id"] for h in vector_hits]
+    bm25_rank = [h["doc_id"] for h in bm25_hits]
+    rankings = [r for r in (vector_rank, bm25_rank) if r]
+    fused_scores = _rrf_fuse(rankings, k=settings.RAG_RRF_K)
+    if not fused_scores:
+        return []
+
+    # 构建 doc_id -> 各路原始分的映射，供 rerank 使用
+    vector_score_by_id: dict[str, float] = {}
+    for h in vector_hits:
+        vector_score_by_id[str(h["doc_id"])] = float(h.get("score") or 0)
+    bm25_score_by_id: dict[str, float] = {}
+    for h in bm25_hits:
+        bm25_score_by_id[str(h["doc_id"])] = float(h.get("score") or 0)
+
+    # ---------- 3. 回查 MySQL 过滤 published ----------
+    candidate_ids = [int(did) for did in fused_scores if did.isdigit()]
+    if not candidate_ids:
+        return []
+    repo = KbStandardRepository(db)
+    published = {s.id: s for s in repo.list_published_by_ids(candidate_ids)}
+
+    # ---------- 4. 规则 rerank ----------
     hits: list[dict] = []
-    for hit in raw_hits:
+    for doc_id in fused_scores:
         try:
-            standard_id = int(hit.get("doc_id"))
+            standard_id = int(doc_id)
         except (TypeError, ValueError):
             continue
         standard = published.get(standard_id)
         if not standard:
-            # 向量库残留（已归档/删除）不注入
+            # 向量库/BM25 残留（已归档/删除）不注入
             continue
-        score = float(hit.get("score") or 0)
-        # 名称/别名命中加权，弥补纯向量检索对专有名词不敏感：标准名出现在查询中即加权
+        v_score = vector_score_by_id.get(doc_id, 0.0)
+        b_score = bm25_score_by_id.get(doc_id, 0.0)
+        f_score = _field_match_score(standard, query_lower)
+        # 综合打分：向量语义 0.5 + BM25 关键词 0.3 + 字段匹配 0.2
+        final_score = 0.5 * v_score + 0.3 * b_score + 0.2 * f_score
+        # 名称精确命中时额外加权（上限由 RAG_NAME_MATCH_BOOST 控制）
         names = [standard.name, *_aliases(standard)]
         if any(name and name.lower() in query_lower for name in names):
-            score = min(1.0, score + 0.1)
-        if score < settings.RAG_MIN_SCORE:
+            final_score = min(1.0, final_score + settings.RAG_NAME_MATCH_BOOST)
+        # 阈值过滤：任一路达标或综合达标即保留，避免单路命中被另一路的 0 分拉低
+        if (
+            v_score < settings.RAG_MIN_SCORE
+            and b_score < settings.RAG_MIN_SCORE
+            and final_score < settings.RAG_MIN_SCORE
+        ):
             continue
         hits.append(
             {
@@ -350,8 +429,17 @@ def retrieve_standards(
                 "name": standard.name,
                 "standard": standard.standard,
                 "required_evidence": standard.required_evidence,
-                "score": score,
+                "score": round(final_score, 4),
+                "_v": round(v_score, 4),
+                "_b": round(b_score, 4),
+                "_f": round(f_score, 4),
             }
         )
+
     hits.sort(key=lambda h: h["score"], reverse=True)
+    # 移除内部调试字段后返回
+    for h in hits:
+        h.pop("_v", None)
+        h.pop("_b", None)
+        h.pop("_f", None)
     return hits[:top_k]

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>TalentFlow 工作流</title>
+<style>
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    margin: 60px 40px;
+    background: white;
+  }
+  h1 {
+    text-align: center;
+    color: #333;
+    margin-bottom: 50px;
+    font-size: 22px;
+    font-weight: 500;
+  }
+  .workflow {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    flex-wrap: nowrap;
+    gap: 0;
+    overflow-x: auto;
+    padding: 20px 0;
+  }
+  .step {
+    position: relative;
+    flex-shrink: 0;
+    width: 180px;
+    min-height: 90px;
+    background: #eef3ff;
+    border: 1.5px solid #4a6cf7;
+    border-radius: 8px;
+    padding: 22px 16px 14px 16px;
+    text-align: center;
+    color: #1a1a2e;
+  }
+  .step-num {
+    position: absolute;
+    top: -12px;
+    left: 10px;
+    width: 24px;
+    height: 24px;
+    background: #4a6cf7;
+    color: white;
+    border-radius: 50%;
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .step-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .step-sub {
+    font-size: 12px;
+    color: #666;
+    line-height: 1.5;
+  }
+  .arrow {
+    flex-shrink: 0;
+    width: 30px;
+    height: 90px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #4a6cf7;
+    font-size: 20px;
+    font-weight: bold;
+  }
+</style>
+</head>
+<body>
+  <h1>TalentFlow 工作流</h1>
+
+  <div class="workflow">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-title">获取职位要求</div>
+      <div class="step-sub">JD 自动提取 / 人工配置</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-title">RAG 混合检索</div>
+      <div class="step-sub">BM25 + 向量 + RRF + Rerank</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-title">上传简历</div>
+      <div class="step-sub">PDF / docx / 图片</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-title">AI 智能解析</div>
+      <div class="step-sub">基本信息 + 匹配建议 + 整体分析</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="step">
+      <div class="step-num">5</div>
+      <div class="step-title">结果校验过滤</div>
+      <div class="step-sub">证据校验 + 错误重试降级</div>
+    </div>
+    <div class="arrow">→</div>
+
+    <div class="step">
+      <div class="step-num">6</div>
+      <div class="step-title">HR 逐条复核</div>
+      <div class="step-sub">编辑建议 + 提交复核意见</div>
+    </div>
+
+  </div>
+</body>
+</html>

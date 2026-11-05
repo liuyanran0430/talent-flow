@@ -13,7 +13,7 @@ from ..schemas.resume import ParseRequest, UploadResult
 from ..services.async_tasks import create_task, execute_task
 from ..services.candidate_service import CandidateNotFoundError, CandidateService
 from ..services.resume_parser import parse_resume
-from ..services.resume_tasks import run_parse
+from ..services.resume_tasks import ParseAlreadyRunningError, run_parse
 from ..core.logging_config import (
     get_audit_logger,
     get_logger,
@@ -128,8 +128,12 @@ def _run_parse_task(candidate_id: int, request_id: str) -> dict:
     """后台任务入口：执行简历解析，任务结果返回候选人 id（详情由前端另行拉取）。
 
     解析失败时抛错以标记任务 failed（候选人已置 review 并带失败说明），前端轮询可提示。
+    同一候选人已有解析在执行时，本次触发被去重跳过并给出明确提示，不重复调用 LLM。
     """
-    ok = run_parse(candidate_id, False, request_id=request_id)
+    try:
+        ok = run_parse(candidate_id, False, request_id=request_id)
+    except ParseAlreadyRunningError:
+        raise RuntimeError("该候选人正在解析中，本次重复触发已跳过")
     if not ok:
         raise RuntimeError("简历解析失败，请手动补全信息或重试")
     return {"candidate_id": candidate_id}

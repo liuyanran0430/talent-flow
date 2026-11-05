@@ -18,7 +18,7 @@ from ..core.logging_config import (
 from ..models import Match
 from ..repositories import CandidateRepository, JobFitRepository, MatchRepository, RequirementRepository
 from ..schemas.requirement import RecalculatePayload
-from .resume_tasks import run_parse
+from .resume_tasks import ParseAlreadyRunningError, run_parse
 from .scoring import calc_match_score
 
 logger = get_logger("requirements")
@@ -53,9 +53,15 @@ def recalc_job_candidates(
         audit.info("要求重算开始 job_id=%s candidates=%s", job_id, len(cand_ids))
         # 逐个重新解析：run_parse 内部自建会话并覆盖式重建 jobfits（沿用同一 request_id）
         parse_failed = 0
+        parse_skipped = 0
         for cid in cand_ids:
             try:
                 run_parse(cid, preserve_status=True, request_id=get_request_id())
+            except ParseAlreadyRunningError:
+                # 该候选人正在解析（用户手动触发或上一轮重算），本轮跳过，不算失败
+                parse_skipped += 1
+                logger.warning("要求重算：候选人正在解析中，跳过 candidate_id=%s", cid)
+                audit.warning("要求重算跳过 job_id=%s candidate_id=%s 原因=解析进行中", job_id, cid)
             except Exception as e:
                 parse_failed += 1
                 logger.exception("要求重算：候选人简历解析失败 candidate_id=%s: %s", cid, e)
@@ -80,8 +86,8 @@ def recalc_job_candidates(
         match_repo.commit()
         logger.info("要求配置重算完成 job_id=%s candidates=%s", job_id, len(cand_ids))
         audit.info(
-            "要求重算完成 job_id=%s candidates=%s parse_failed=%s score_failed=%s",
-            job_id, len(cand_ids), parse_failed, score_failed,
+            "要求重算完成 job_id=%s candidates=%s parse_failed=%s parse_skipped=%s score_failed=%s",
+            job_id, len(cand_ids), parse_failed, parse_skipped, score_failed,
         )
     finally:
         reset_request_id(request_token)

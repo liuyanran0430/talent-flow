@@ -566,7 +566,7 @@ export default function Candidates() {
         {detail && editForm && (
           <>
             <ModalHeader title={`${detail.candidate.name || '未命名'} · 候选人详情`} subtitle="查看解析信息，可修改后采纳或直接采纳。" onClose={discardDetail} />
-            <div className="p-4 md:p-6 md:max-h-[70vh] overflow-y-auto">
+            <div className="flex-1 p-4 md:p-6 overflow-y-auto">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-5">
                 <label className="text-sm font-medium text-slate-700">
                   候选人姓名

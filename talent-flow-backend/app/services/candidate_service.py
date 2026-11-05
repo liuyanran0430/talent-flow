@@ -1,6 +1,7 @@
 ﻿import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from sqlalchemy import or_, update
 from sqlalchemy.orm import Session
 
 from ..core.logging_config import get_logger
@@ -12,6 +13,9 @@ from ..schemas.candidate import CandidateCreate, CandidateOut, CandidateUpdate
 _RESUME_FIELDS = {"job_id", "experience", "info", "resume_path", "resume_hash", "analysis", "review_note"}
 
 logger = get_logger("candidate_service")
+
+# 解析卡死判定阈值：status=processing 且超过该秒数未更新，视为后台任务丢失，允许重新触发
+STALE_PARSE_SECONDS = 180
 
 
 class CandidateNotFoundError(Exception):
@@ -96,7 +100,11 @@ class CandidateService:
         return self.resume_repo.find_by_hash(resume_hash)
 
     def mark_parsing(self, candidate_id: int) -> tuple[Candidate, bool]:
-        """标记候选人进入解析中，返回 (候选人, 是否放行)。
+        """原子抢占候选人解析权，返回 (候选人, 是否放行)。
+
+        并发触发时用一条条件 UPDATE 保证只有一个请求能抢到：只有未被占用
+        （或已僵死的）行才会更新成功，其余请求返回 proceed=False，避免同一份
+        简历被重复调用 LLM。该抢占在数据库层面完成，多进程部署同样有效。
 
         僵死自愈：status=processing 且 3 分钟内未完成（服务重载/进程被杀导致后台任务丢失），
         放行重新触发；未超时不放行（already parsing）。
@@ -104,12 +112,30 @@ class CandidateService:
         c = self.repo.get(candidate_id)
         if not c:
             raise CandidateNotFoundError(f"candidate {candidate_id} not found")
+        # 快速路径：仍占用且未超时，直接拒绝，省一次条件更新
         if c.status == "processing":
             elapsed = (datetime.now() - c.updated_at).total_seconds()
-            if elapsed < 180:
+            if elapsed < STALE_PARSE_SECONDS:
                 return c, False
-            logger.warning("僵死自愈放行重新解析 candidate_id=%s 卡顿时长=%.0fs", candidate_id, elapsed)
-        c.status = "processing"
+            logger.warning("僵死自愈尝试放行重新解析 candidate_id=%s 卡顿时长=%.0fs", candidate_id, elapsed)
+
+        cutoff = datetime.now() - timedelta(seconds=STALE_PARSE_SECONDS)
+        claimed = (
+            self.repo.db.execute(
+                update(Candidate)
+                .where(
+                    Candidate.id == candidate_id,
+                    or_(Candidate.status != "processing", Candidate.updated_at < cutoff),
+                )
+                .values(status="processing", updated_at=datetime.now())
+            ).rowcount
+            == 1
+        )
+        self.repo.commit()
+        self.repo.refresh(c)
+        if not claimed:
+            # 并发对手已先一步抢占成功
+            return c, False
         if c.resume:
             c.resume.info = "正在解析简历"
         self.repo.commit()

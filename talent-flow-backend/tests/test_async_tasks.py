@@ -1,7 +1,9 @@
 """异步任务链路用例：LLM 接口立即返回 request_id，后台处理，前端凭 request_id 轮询状态。"""
 
 import json
+import threading
 
+import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
@@ -166,3 +168,76 @@ def test_recalculate_returns_request_id_when_candidates_exist(client, db, monkey
 
     db.expire_all()
     assert db.get(Candidate, cand.id).status == "finish"  # 已确认候选人重算后保持 finish
+
+
+def test_run_parse_dedupes_concurrent_calls_for_same_candidate(db, monkeypatch):
+    """同一候选人并发触发解析：第二个调用被单飞去重跳过，LLM 只调用一次。"""
+    job = _create_job(db, description="Python 后端")
+    cand = _create_candidate(db, job.id, status="review")
+
+    entered = threading.Event()
+    release = threading.Event()
+    calls = {"n": 0}
+
+    def _slow_parse(*_args, **_kwargs):
+        calls["n"] += 1
+        entered.set()
+        assert release.wait(5), "等待首个解析释放超时"
+        return json.dumps(_RESUME_RESULT, ensure_ascii=False)
+
+    monkeypatch.setattr(resume_tasks, "parse_resume", _slow_parse)
+
+    result: dict = {}
+
+    def _run_first() -> None:
+        try:
+            result["first"] = resume_tasks.run_parse(cand.id, request_id="first")
+        except Exception as e:  # noqa: BLE001  记录异常供断言
+            result["first"] = e
+
+    thread = threading.Thread(target=_run_first)
+    thread.start()
+    assert entered.wait(5), "首个解析未进入 LLM 调用"
+
+    with pytest.raises(resume_tasks.ParseAlreadyRunningError):
+        resume_tasks.run_parse(cand.id, request_id="second")
+
+    release.set()
+    thread.join(10)
+    assert result["first"] is True
+    assert calls["n"] == 1
+
+
+def test_analyze_skips_when_candidate_already_processing(client, db):
+    """候选人已在解析中（未超时）：重复触发直接返回 already parsing，不创建任务。"""
+    from datetime import datetime
+
+    job = _create_job(db, description="Python 后端")
+    cand = _create_candidate(db, job.id, status="processing")
+    # sqlite 的 CURRENT_TIMESTAMP 是 UTC，与本地 datetime.now() 存在时差，这里显式写入本地时间
+    cand.updated_at = datetime.now()
+    db.commit()
+
+    r = client.post(f"/resumes/{cand.id}/analyze")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["status"] == "processing"
+    assert "request_id" not in data
+
+
+def test_mark_parsing_reclaims_stale_processing_candidate(db):
+    """processing 超过 3 分钟视为僵死，允许重新抢占（自愈）。"""
+    from datetime import datetime, timedelta
+
+    from app.services.candidate_service import CandidateService
+
+    job = _create_job(db, description="Python 后端")
+    cand = _create_candidate(db, job.id, status="processing")
+    cand.updated_at = datetime.now() - timedelta(minutes=5)
+    db.commit()
+
+    _, proceed = CandidateService(db).mark_parsing(cand.id)
+    assert proceed is True
+
+    db.expire_all()
+    assert db.get(Candidate, cand.id).status == "processing"

@@ -44,8 +44,32 @@ async def lifespan(_: FastAPI):
     )
     init_db()
     lifecycle_logger.info("数据库初始化完成")
+    # 构建岗位标准 BM25 内存索引（混合检索的关键词支路）
+    _init_standard_bm25()
     yield
     lifecycle_logger.info("应用关闭")
+
+
+def _init_standard_bm25() -> None:
+    """启动时从已发布标准构建 BM25 索引，失败只告警不阻断。"""
+    if not (settings.RAG_ENABLED and settings.RAG_BM25_ENABLED):
+        return
+    try:
+        from app.database import SessionLocal
+        from app.repositories import KbStandardRepository
+        from app.rag.bm25 import get_standard_bm25
+        from app.services.kb_service import standard_to_text
+
+        db = SessionLocal()
+        try:
+            standards = KbStandardRepository(db).list_published()
+            docs = [(str(s.id), standard_to_text(s)) for s in standards]
+            get_standard_bm25().rebuild(docs)
+            lifecycle_logger.info("BM25 索引构建完成 standards=%d", len(standards))
+        finally:
+            db.close()
+    except Exception as e:
+        lifecycle_logger.warning("BM25 索引构建失败，关键词支路降级：%s", e)
 
 
 app = FastAPI(

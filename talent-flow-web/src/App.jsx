@@ -7,6 +7,7 @@ import Requirements from './pages/Requirements'
 import ImportResume from './pages/ImportResume'
 import Candidates from './pages/Candidates'
 import Report from './pages/Report'
+import KnowledgeQA from './pages/KnowledgeQA'
 
 function Pages() {
   const { section } = useApp()
@@ -21,6 +22,8 @@ function Pages() {
       return <Candidates />
     case 'report':
       return <Report />
+    case 'qa':
+      return <KnowledgeQA />
     default:
       return <Jobs />
   }

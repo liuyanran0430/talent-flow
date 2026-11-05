@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     VECTOR_STORE_BACKEND: str = "chroma"  # chroma / null
     VECTOR_STORE_PATH: str = "data/vector_store"  # 本地向量持久化目录
     RAG_REBUILD_BATCH: int = 32  # 重建索引时每批向量化的条数
+    # 混合检索：BM25 关键词支路 + RRF 融合 + 规则 rerank
+    RAG_BM25_ENABLED: bool = True  # 关闭后仅走向量检索
+    RAG_RRF_K: int = 60  # RRF 融合常数，越大排名差异权重越平滑
+    RAG_CANDIDATE_POOL: int = 15  # 融合前每路召回数量（top_k * 3 左右）
+    RAG_NAME_MATCH_BOOST: float = 0.2  # 规则 rerank 中名称/别名精确命中的加权上限
 
     @property
     def database_url(self) -> str:
