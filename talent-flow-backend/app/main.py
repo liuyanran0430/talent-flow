@@ -14,7 +14,7 @@ from .core.logging_config import (
     set_user_id,
     setup_logging,
 )
-from .api import candidates, departments, jobfits, jobs, kb, logs, matches, requirements, resumes, tasks, templates
+from .api import candidates, departments, jobfits, jobs, kb, logs, matches, qa, requirements, resumes, tasks, templates
 from .schemas.common import ApiResponse
 
 # 模块导入即初始化：uvicorn --reload 启动/热重载后自动生效，日志写入 logs/ 目录
@@ -34,6 +34,7 @@ TAGS_METADATA = [
     {"name": "logs", "description": "日志：接收前端上报的异常日志并落盘"},
     {"name": "tasks", "description": "异步任务：LLM 接口返回 request_id，凭该 id 轮询处理状态与结果"},
     {"name": "kb", "description": "岗位标准知识库：标准条目维护、发布向量化、检索与索引重建"},
+    {"name": "qa", "description": "招聘知识问答：制度检索、受限生成、引用校验与岗位能力问答"},
 ]
 
 
@@ -46,6 +47,7 @@ async def lifespan(_: FastAPI):
     lifecycle_logger.info("数据库初始化完成")
     # 构建岗位标准 BM25 内存索引（混合检索的关键词支路）
     _init_standard_bm25()
+    _init_doc_bm25()
     yield
     lifecycle_logger.info("应用关闭")
 
@@ -70,6 +72,24 @@ def _init_standard_bm25() -> None:
             db.close()
     except Exception as e:
         lifecycle_logger.warning("BM25 索引构建失败，关键词支路降级：%s", e)
+
+
+def _init_doc_bm25() -> None:
+    """启动时从制度分段构建 BM25 索引，失败只告警不阻断。"""
+    if not (settings.QA_ENABLED and settings.RAG_BM25_ENABLED):
+        return
+    try:
+        from app.database import SessionLocal
+        from app.services.doc_kb_service import rebuild_doc_bm25_from_db
+
+        db = SessionLocal()
+        try:
+            count = rebuild_doc_bm25_from_db(db)
+            lifecycle_logger.info("制度 BM25 索引构建完成 segments=%d", count)
+        finally:
+            db.close()
+    except Exception as e:
+        lifecycle_logger.warning("制度 BM25 索引构建失败，关键词支路降级：%s", e)
 
 
 app = FastAPI(
@@ -166,3 +186,4 @@ app.include_router(templates.router)
 app.include_router(logs.router)
 app.include_router(tasks.router)
 app.include_router(kb.router)
+app.include_router(qa.router)

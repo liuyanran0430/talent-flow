@@ -59,14 +59,24 @@ class ChromaVectorStore:
                 metadatas=[it.get("metadata") or {} for it in chunk],
             )
 
-    def search(self, namespace: str, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+    def search(
+        self,
+        namespace: str,
+        query: str,
+        top_k: int = 5,
+        where: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         if top_k <= 0:
             return []
         vector = embed_query(query)
+        kwargs: dict[str, Any] = {}
+        if where:
+            kwargs["where"] = where
         result = self._collection(namespace).query(
             query_embeddings=[vector],
             n_results=top_k,
             include=["documents", "metadatas", "distances"],
+            **kwargs,
         )
         ids = (result.get("ids") or [[]])[0]
         documents = (result.get("documents") or [[]])[0]

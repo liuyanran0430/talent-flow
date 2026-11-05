@@ -40,6 +40,8 @@ user_id_var: ContextVar[str] = ContextVar("user_id", default="-")
 prompt_version_var: ContextVar[str] = ContextVar("prompt_version", default="-")
 # 检索命中的标准/知识 chunk id：由解析器在注入 Prompt 前绑定，写入 LLM 结构化日志
 retrieval_ids_var: ContextVar[str] = ContextVar("retrieval_ids", default="")
+# 工具调用明细：由业务在调用 LLM 前绑定（JSON 字符串），写入 LLM 结构化日志
+tool_calls_var: ContextVar[str] = ContextVar("tool_calls", default="")
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-7s | request_id=%(request_id)s | %(name)s | %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -117,6 +119,26 @@ def reset_retrieval_ids(token) -> None:
 def get_retrieval_ids() -> list[str]:
     raw = retrieval_ids_var.get()
     return [item for item in raw.split(",") if item] if raw else []
+
+
+def set_tool_calls(calls: list[dict] | None):
+    """绑定本次 LLM 调用关联的工具调用明细，返回 token"""
+    return tool_calls_var.set(json.dumps(calls or [], ensure_ascii=False, default=str))
+
+
+def reset_tool_calls(token) -> None:
+    _reset(tool_calls_var, token)
+
+
+def get_tool_calls() -> list[dict]:
+    raw = tool_calls_var.get()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except ValueError:
+        return []
 
 
 class ContextFilter(logging.Filter):

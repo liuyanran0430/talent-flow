@@ -55,6 +55,33 @@ class Settings(BaseSettings):
     RAG_CANDIDATE_POOL: int = 15  # 融合前每路召回数量（top_k * 3 左右）
     RAG_NAME_MATCH_BOOST: float = 0.2  # 规则 rerank 中名称/别名精确命中的加权上限
 
+    # ---------- 招聘知识问答 ----------
+    QA_ENABLED: bool = True  # 关闭后整页返回维护提示
+    QA_CLASSIFIER_TEMPERATURE: float = 0.0  # 分类器温度，要求稳定输出
+    QA_CLASSIFIER_MAX_TOKENS: int = 16  # 分类器只输出一个类别名
+
+    QA_DOC_TOP_K: int = 4  # 制度检索 TopK
+    QA_DOC_MIN_SCORE: float = 0.55  # 综合分阈值
+    QA_DOC_BM25_WEIGHT: float = 0.45  # 关键词权重
+    QA_DOC_VECTOR_WEIGHT: float = 0.55  # 向量权重
+    QA_DOC_CANDIDATE_POOL: int = 12  # 每路候选池
+    QA_DOC_MAX_EVIDENCE_CHARS: int = 2000  # 证据注入总长上限
+
+    QA_DOC_CHUNK_MAX_CHARS: int = 600  # 分段最大长度
+    QA_DOC_CHUNK_OVERLAP: int = 60  # 分段重叠长度
+    QA_DOC_CHUNK_SEPARATOR: str = "\n\n"  # 分段标识符
+    QA_DOC_MAX_TABLE_CHARS: int = 800  # 表格块允许超限上限
+    QA_DOC_MIN_CHUNK_CHARS: int = 80  # 低于该长度与相邻块合并
+
+    QA_JOB_TOOL_MAX_ROUNDS: int = 3  # 岗位工具最大轮次
+    QA_MAX_HISTORY_TURNS: int = 3  # 前端回传的历史轮数上限
+    QA_ANSWER_MAX_CHARS: int = 1500  # 答案长度上限
+    QA_SELF_CHECK_ENABLED: bool = False  # LLM 自检（默认关闭）
+    QA_SINGLE_PATH_BYPASS_SCORE: float = 0.75  # 单路豁免阈值（>1 即关闭）
+    QA_SINGLE_PATH_BYPASS_MAX: int = 1  # 同批次最多豁免条数
+
+    QA_KNOWLEDGE_DIR: str = "data/knowledge_files"  # 制度文档源目录
+
     @property
     def database_url(self) -> str:
         if self.DATABASE_URL:

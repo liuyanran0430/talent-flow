@@ -38,11 +38,13 @@ class ModelClient:
         temperature: float | None = None,
         timeout: int | None = None,
         max_retries: int | None = None,
+        max_tokens: int | None = None,
     ) -> None:
         self._model = model or settings.LLM_MODEL
         self._temperature = settings.LLM_TEMPERATURE if temperature is None else temperature
         self._timeout = settings.LLM_TIMEOUT if timeout is None else timeout
         self._max_retries = settings.LLM_MAX_RETRIES if max_retries is None else max_retries
+        self._max_tokens = settings.LLM_MAX_TOKENS if max_tokens is None else max_tokens
         self._chat_model: Runnable | None = None
         # 每次调用记录 model / token / latency / 状态到 llm_runs
         self._run_recorder = LLMRunCallbackHandler()
@@ -58,7 +60,7 @@ class ModelClient:
                 # 硬超时：请求超过该秒数视为失败（配合重试上限）
                 timeout=self._timeout,
                 # 输出 token 上限：配合各业务的输入截断，控制总上下文占用
-                max_tokens=settings.LLM_MAX_TOKENS,
+                max_tokens=self._max_tokens,
                 # 关闭 SDK 内置重试，统一由下方 with_retry 控制，便于按配置睡眠并记录每次尝试
                 max_retries=0,
                 callbacks=[self._run_recorder],

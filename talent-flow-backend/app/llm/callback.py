@@ -25,6 +25,7 @@ from ..core.logging_config import (
     get_request_id,
     get_retrieval_ids,
     get_session_id,
+    get_tool_calls,
     get_user_id,
     write_llm_event,
 )
@@ -134,8 +135,8 @@ def _record(
         "model": model or "-",
         "prompt_version": _context_or_none(get_prompt_version()),
         "retrieval_ids": get_retrieval_ids(),
-        # 暂未接入工具调用，按空数组记录，便于后续扩展
-        "tool_calls": [],
+        # 当前业务是否触发工具（岗位查询等），由调用方在生成前绑定
+        "tool_calls": get_tool_calls(),
         "latency_ms": latency_ms,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,

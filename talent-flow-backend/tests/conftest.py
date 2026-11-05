@@ -53,6 +53,9 @@ def _create_tables():
 def _block_real_llm(monkeypatch):
     """禁止测试意外调用真实 LLM：需要 LLM 的用例必须自己 monkeypatch get_model_client。"""
     import app.services.jd_parser as jd_parser
+    import app.services.job_profile as job_profile
+    import app.services.qa_classifier as qa_classifier
+    import app.services.qa_service as qa_service
     import app.services.resume_parser as resume_parser
 
     def _blocked(*args, **kwargs):
@@ -60,6 +63,9 @@ def _block_real_llm(monkeypatch):
 
     monkeypatch.setattr(resume_parser, "get_model_client", _blocked)
     monkeypatch.setattr(jd_parser, "get_model_client", _blocked)
+    monkeypatch.setattr(qa_service, "get_model_client", _blocked)
+    monkeypatch.setattr(qa_classifier, "ModelClient", _blocked)
+    monkeypatch.setattr(job_profile, "ModelClient", _blocked)
     yield
 
 

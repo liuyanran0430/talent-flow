@@ -189,3 +189,26 @@ def bm25_search_standards(query: str, top_k: int = 10) -> list[dict]:
     except Exception as e:
         logger.warning("BM25 检索失败，降级为纯向量：%s", e)
         return []
+
+
+# 全局单例：制度知识库分段 BM25 索引（kb_docs 命名空间）
+_doc_bm25 = BM25Index()
+
+
+def get_doc_bm25() -> BM25Index:
+    return _doc_bm25
+
+
+def bm25_search_docs(query: str, top_k: int = 10) -> list[dict]:
+    """检索制度分段 BM25 索引，索引未构建或不可用时返回空列表。"""
+    if not settings.RAG_BM25_ENABLED:
+        return []
+    try:
+        return _doc_bm25.search(query, top_k=top_k)
+    except Exception as e:
+        logger.warning("制度 BM25 检索失败，降级为纯向量：%s", e)
+        return []
+
+
+def is_doc_bm25_available() -> bool:
+    return settings.RAG_BM25_ENABLED and _doc_bm25._N > 0

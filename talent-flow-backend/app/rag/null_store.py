@@ -18,7 +18,13 @@ class NullVectorStore:
     def upsert_many(self, namespace: str, items: list[dict[str, Any]]) -> None:
         logger.warning("向量库未配置，upsert_many 被跳过 namespace=%s count=%s", namespace, len(items))
 
-    def search(self, namespace: str, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+    def search(
+        self,
+        namespace: str,
+        query: str,
+        top_k: int = 5,
+        where: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         logger.warning("向量库未配置，search 返回空 namespace=%s", namespace)
         return []
 

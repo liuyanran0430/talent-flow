@@ -14,7 +14,13 @@ class VectorStoreClient(Protocol):
         """批量写入/更新向量文档，items 为 [{doc_id, text, metadata}]。"""
         ...
 
-    def search(self, namespace: str, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+    def search(
+        self,
+        namespace: str,
+        query: str,
+        top_k: int = 5,
+        where: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         """语义检索，返回 [{doc_id, text, metadata, score}, ...]。"""
         ...
 
