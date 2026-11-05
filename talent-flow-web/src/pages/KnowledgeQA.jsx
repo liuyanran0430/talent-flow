@@ -228,24 +228,18 @@ export default function KnowledgeQA() {
 
   return (
     <section className="p-4 md:p-8 max-w-[1440px] mx-auto">
-      {/* 对话区 */}
-      <div className="rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col h-[calc(100vh-10rem)] min-h-[440px]">
-        <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3">
-          <Icon icon="solar:book-2-outline" width={18} className="text-cyan-600" />
-          <span className="text-sm font-medium text-slate-800">招聘制度问答</span>
-          <div className="ml-auto flex items-center gap-3">
-            <span className="hidden sm:inline text-xs text-slate-400">答案附带来源</span>
-            <button
-              onClick={() => setConfirmOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-            >
-              <Icon icon="solar:add-circle-outline" width={16} />
-              新建对话
-            </button>
-          </div>
-        </div>
+      {/* 对话区：内容占满页面，新建对话为右上角悬浮按钮 */}
+      <div className="relative rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col h-[calc(100vh-5.5rem)] md:h-[calc(100vh-8rem)] min-h-[440px]">
+        <button
+          onClick={() => setConfirmOpen(true)}
+          title="新建对话"
+          aria-label="新建对话"
+          className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 bg-white/95 text-slate-600 shadow-sm hover:bg-slate-50 hover:text-slate-900"
+        >
+          <Icon icon="solar:add-circle-outline" width={18} />
+        </button>
 
-        <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        <div ref={listRef} className="flex-1 overflow-y-auto px-4 pb-4 pt-14 space-y-4">
           {messages.length === 0 && !thinking ? (
             <div>
               <div className="rounded-2xl rounded-tl-sm bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-700">
