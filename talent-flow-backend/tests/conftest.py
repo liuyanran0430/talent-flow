@@ -66,6 +66,7 @@ def _block_real_llm(monkeypatch):
     monkeypatch.setattr(qa_service, "get_model_client", _blocked)
     monkeypatch.setattr(qa_classifier, "ModelClient", _blocked)
     monkeypatch.setattr(job_profile, "ModelClient", _blocked)
+    monkeypatch.setattr(qa_service, "ModelClient", _blocked)
     yield
 
 

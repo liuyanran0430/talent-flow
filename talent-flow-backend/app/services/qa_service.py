@@ -20,11 +20,12 @@ from ..core.logging_config import (
     set_retrieval_ids,
     set_tool_calls,
 )
-from ..llm.client import get_model_client
+from ..llm.client import ModelClient, get_model_client
 from .doc_retriever import build_evidence, retrieve_doc_segments
 from .job_profile import (
     extract_job_terms,
     has_job_target_hint,
+    has_standard_hint,
     job_evidence,
     job_profile,
     match_extracted_terms,
@@ -85,20 +86,72 @@ def _fixed_answer(text: str, *, hit: bool = False, category: str | None = None, 
     }
 
 
-def _history_context(history: list[dict] | None) -> str:
-    turns = (history or [])[-settings.QA_MAX_HISTORY_TURNS :]
-    if not turns:
-        return "无"
+_SUMMARY_SYSTEM_PROMPT = (
+    "你是招聘问答对话的摘要器。把给定的历史问答压缩为不超过 "
+    f"{settings.QA_HISTORY_SUMMARY_MAX_CHARS} 字的第三人称摘要，"
+    "必须保留其中出现的部门名、岗位名、已确认的事实与结论（如「已确定的岗位是 X」），"
+    "丢弃寒暄与过程性文字。只输出摘要文本，不要输出其他内容。"
+)
+
+
+def _summarize_history(turns: list[dict]) -> str | None:
+    """把较早的历史轮次压缩为一段摘要；失败返回 None（调用方降级为丢弃旧轮次）。"""
+    lines = []
+    for turn in turns:
+        question = str(turn.get("question") or "").strip()
+        answer = str(turn.get("answer") or "").strip()
+        if question or answer:
+            lines.append(f"问：{question}\n答：{answer}")
+    if not lines:
+        return None
+    try:
+        client = ModelClient(temperature=0.0, max_tokens=settings.QA_SUMMARY_MAX_TOKENS)
+        response = client.chat_model.invoke(
+            [
+                SystemMessage(content=_SUMMARY_SYSTEM_PROMPT),
+                HumanMessage(content="\n\n".join(lines)),
+            ]
+        )
+        summary = str(response.content or "").strip()
+    except Exception as e:
+        logger.warning("历史摘要生成失败，降级为丢弃旧轮次：%s", e)
+        return None
+    if not summary:
+        return None
+    return summary[: settings.QA_HISTORY_SUMMARY_MAX_CHARS]
+
+
+def _format_turns(turns: list[dict]) -> str:
     lines = []
     for turn in turns:
         question = str(turn.get("question") or "").strip()
         answer = str(turn.get("answer") or "").strip()
         if question or answer:
             lines.append(f"上一轮问题：{question}\n上一轮回答：{answer}")
-    return "\n".join(lines) if lines else "无"
+    return "\n".join(lines)
 
 
-def _build_user_message(question: str, evidence: list[dict], history: list[dict] | None) -> str:
+def _history_context(history: list[dict] | None) -> str:
+    """拼装历史上下文：最近 QA_HISTORY_RECENT_TURNS 轮保留原文，更早的压缩为摘要。
+
+    摘要仅在轮数超过保留窗口时触发，且每次提问最多调用一次（由 _answer_from_evidence
+    预计算后传入，重试不重复摘要）。
+    """
+    turns = (history or [])[-settings.QA_MAX_HISTORY_TURNS :]
+    if not turns:
+        return "无"
+    recent_n = settings.QA_HISTORY_RECENT_TURNS
+    if len(turns) <= recent_n:
+        return _format_turns(turns) or "无"
+    older, recent = turns[:-recent_n], turns[-recent_n:]
+    recent_text = _format_turns(recent)
+    summary = _summarize_history(older)
+    if summary:
+        return f"【较早对话摘要】\n{summary}\n\n【最近对话】\n{recent_text}"
+    return recent_text or "无"
+
+
+def _build_user_message(question: str, evidence: list[dict], history_context: str) -> str:
     blocks = []
     for item in evidence:
         blocks.append(
@@ -108,11 +161,11 @@ def _build_user_message(question: str, evidence: list[dict], history: list[dict]
     return (
         f"【问题】\n{question}\n\n"
         f"【证据】\n{evidence_text}\n\n"
-        f"【补充上下文】\n{_history_context(history)}"
+        f"【补充上下文】\n{history_context}"
     )
 
 
-def _invoke_answer(question: str, evidence: list[dict], history: list[dict] | None, tool_calls: list[dict] | None) -> str:
+def _invoke_answer(question: str, evidence: list[dict], history_context: str, tool_calls: list[dict] | None) -> str:
     pv_token = set_prompt_version(PROMPT_VERSION)
     ids_token = set_retrieval_ids([item["segment_id"] for item in evidence])
     tool_token = set_tool_calls(tool_calls)
@@ -121,7 +174,7 @@ def _invoke_answer(question: str, evidence: list[dict], history: list[dict] | No
         response = client.chat_model.invoke(
             [
                 SystemMessage(content=_SYSTEM_PROMPT),
-                HumanMessage(content=_build_user_message(question, evidence, history)),
+                HumanMessage(content=_build_user_message(question, evidence, history_context)),
             ]
         )
         return str(response.content or "")
@@ -298,8 +351,10 @@ def _answer_from_evidence(
 ) -> dict:
     if not evidence:
         return _fixed_answer(FALLBACK_ANSWER, category=category)
+    # 历史上下文只计算一次：轮数超标时触发一次摘要调用，校验重试复用同一上下文
+    history_context = _history_context(history)
     try:
-        raw = _invoke_answer(question, evidence, history, tool_calls)
+        raw = _invoke_answer(question, evidence, history_context, tool_calls)
     except Exception as e:
         logger.warning("制度问答生成失败：%s", e)
         return _fixed_answer(FALLBACK_ANSWER, category=category, degraded=True)
@@ -307,7 +362,7 @@ def _answer_from_evidence(
     if not result:
         logger.warning("制度问答输出校验不通过，重试一次")
         try:
-            raw = _invoke_answer(question, evidence, history, tool_calls)
+            raw = _invoke_answer(question, evidence, history_context, tool_calls)
             result = parse_and_validate(raw, evidence, question)
         except Exception as e:
             logger.warning("制度问答重试失败：%s", e)
@@ -347,8 +402,8 @@ def answer_question(
         return result
 
     category = classify_question(question, pending_intent=pending_intent, history=history)
-    # 问题明显在问某个岗位但未点名时，交给岗位分支追问候选，避免落到通用澄清话术
-    if category == AMBIGUOUS and has_job_target_hint(question):
+    # 问题明显在问某个岗位或某项能力的标准，但分类器判为模糊时，交给岗位分支处理
+    if category == AMBIGUOUS and (has_job_target_hint(question) or has_standard_hint(question)):
         category = JOB_ABILITY
     if category == OUT_OF_SCOPE:
         result = _fixed_answer(OUT_OF_SCOPE_ANSWER, category=category)

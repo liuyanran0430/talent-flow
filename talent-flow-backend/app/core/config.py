@@ -74,7 +74,10 @@ class Settings(BaseSettings):
     QA_DOC_MIN_CHUNK_CHARS: int = 80  # 低于该长度与相邻块合并
 
     QA_JOB_TOOL_MAX_ROUNDS: int = 3  # 岗位工具最大轮次
-    QA_MAX_HISTORY_TURNS: int = 3  # 前端回传的历史轮数上限
+    QA_MAX_HISTORY_TURNS: int = 8  # 前端回传的历史轮数上限（超出更早的直接丢弃）
+    QA_HISTORY_RECENT_TURNS: int = 4  # 保留原文注入的最近轮数，更早的压缩为摘要
+    QA_HISTORY_SUMMARY_MAX_CHARS: int = 200  # 历史摘要最大长度
+    QA_SUMMARY_MAX_TOKENS: int = 220  # 摘要生成的 max_tokens
     QA_ANSWER_MAX_CHARS: int = 1500  # 答案长度上限
     QA_SELF_CHECK_ENABLED: bool = False  # LLM 自检（默认关闭）
     QA_SINGLE_PATH_BYPASS_SCORE: float = 0.75  # 单路豁免阈值（>1 即关闭）

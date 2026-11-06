@@ -20,7 +20,20 @@ UNASSIGNED_DEPARTMENT = "未分配部门"
 
 _PRONOUNS = ("这个岗位", "该岗位", "该职位", "本岗位", "这个职位", "这个职位的要求")
 # 明确在问「某个岗位的要求项」但未点名的信号词：用于发起岗位澄清，而不是当作通用能力检索
-_JOB_TARGET_HINTS = _PRONOUNS + ("要求项", "岗位要求", "任职要求", "职位要求")
+_JOB_TARGET_HINTS = _PRONOUNS + ("要求项",)
+
+# 在问某项能力/标准的判定口径，即使提到「岗位要求」也只是限定范围，不是点名某个岗位
+_STANDARD_HINTS = (
+    "判定标准",
+    "证据要求",
+    "能力标准",
+    "如何判定",
+    "怎么判定",
+    "达到什么程度",
+    "要求达到",
+    "熟练度",
+    "掌握程度",
+)
 
 _EXTRACT_SYSTEM = """从用户问题中抽取部门名称与岗位名称，只输出一个 JSON 对象：
 {"department_name": "部门名称或空字符串", "job_name": "岗位名称或空字符串"}
@@ -58,6 +71,11 @@ def _ambiguous(candidates: list[dict]) -> dict:
 def has_job_target_hint(question: str) -> bool:
     """问题是否明显在问某个岗位的要求，但未点明具体岗位名。"""
     return any(keyword in (question or "") for keyword in _JOB_TARGET_HINTS)
+
+
+def has_standard_hint(question: str) -> bool:
+    """问题是否在问某项能力/标准的判定口径，此类问题走通用标准检索而非追问岗位。"""
+    return any(keyword in (question or "") for keyword in _STANDARD_HINTS)
 
 
 def resolve_job_target(
@@ -124,8 +142,8 @@ def resolve_job_target(
     if dept_hits:
         return {"status": "department_only", "job": None, "candidates": dept_hits}
 
-    # 只给指代词 / 问「岗位要求项」但未点名：追问具体岗位，并列出候选
-    if has_job_target_hint(question):
+    # 只给指代词 / 问「岗位要求项」但未点名，且不是在问标准判定口径：追问具体岗位
+    if has_job_target_hint(question) and not has_standard_hint(question):
         return _ambiguous(list_jobs(db))
     return {"status": "none", "job": None, "candidates": []}
 

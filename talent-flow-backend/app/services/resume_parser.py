@@ -193,7 +193,10 @@ system_prompt = """你是一名资深简历解析专家。基于用户提供的�
 硬性规则：
 1. 基本信息必须来自简历原文，未识别到的字段填 null，严禁编造
 2. 匹配建议只能是：满足/不满足/证据不足
-3. 匹配依据、优势/风险的 evidence 必须直接引用简历原文；没有依据时填空字符串或直接省略该条目
+   - 满足：简历中有明确证据支持该要求项
+   - 不满足：简历中有明确证据表明候选人不具备该要求项（如明确写着「未使用过」「无相关经验」，或工作经历方向明显不符）
+   - 证据不足：简历中没有提及该要求项相关内容，或现有信息不足以判断。简历未提及某项要求时，一律判为「证据不足」，不得判为「不满足」
+3. 匹配依据、优势/风险的 evidence 必须直接引用简历原文；没有依据时填空字符串或直接省略该条目。判为「不满足」时，evidence 必须是能证明候选人不具备该项的原文，找不到此类原文就必须改判「证据不足」
 4. 优势（advantages）没有证据的条目不得出现，evidence 为空或太短（少于 6 字）的优势必须直接省略，不能返回
 5. 风险（risks）可以在 evidence 较弱时保留，但仍需尽力引用原文
 6. 逐项输出所有要求项，name 与输入保持完全一致，不要遗漏、不要新增
@@ -217,13 +220,16 @@ classify_prompt = ChatPromptTemplate.from_messages(
 # 优势 evidence 最小长度：短于此值视为"没有证据"，该优势必须被过滤掉
 # 风险 evidence 放宽（可能简历未明确提及某风险，但仍保留条目提醒 HR 核实）
 _ADVANTAGE_MIN_EVIDENCE_CHARS = 6
+# 「不满足」必须有能证明不具备该项的原文；证据缺失或过短说明简历未提及，统一改判「证据不足」
+_NEGATIVE_MIN_EVIDENCE_CHARS = 6
 
 
 def _validate(result: ResumeParseResult, requirement_names: List[str]) -> str:
     """业务层额外校验：
     1. 建议项与输入要求项一一对齐（缺失补齐，多余剔除）
-    2. 优势强制证据过滤：evidence 为空或太短的优势必须移除，返回空数组而非保留无证据条目
-    3. 风险 evidence 为空的条目保留（提醒 HR 核实），但空数组可接受
+    2. 无证据的「不满足」改判「证据不足」：简历未提及不能等同于候选人确实不具备
+    3. 优势强制证据过滤：evidence 为空或太短的优势必须移除，返回空数组而非保留无证据条目
+    4. 风险 evidence 为空的条目保留（提醒 HR 核实），但空数组可接受
     """
     # ---- 建议项对齐 ----
     by_name = {s.name: s for s in result.suggestions}
@@ -231,11 +237,16 @@ def _validate(result: ResumeParseResult, requirement_names: List[str]) -> str:
     for name in requirement_names:
         if name in by_name:
             s = by_name[name]
+            evidence = s.evidence or ""
+            suggestion = s.suggestion
+            # 判为不满足但没有可引用的反向证据 → 证据不足
+            if suggestion == "不满足" and len(evidence.strip()) < _NEGATIVE_MIN_EVIDENCE_CHARS:
+                suggestion = "证据不足"
             aligned.append(
                 MatchSuggestion(
                     name=name,
-                    suggestion=s.suggestion,
-                    evidence=s.evidence or "",
+                    suggestion=suggestion,
+                    evidence=evidence,
                 )
             )
         else:

@@ -385,6 +385,16 @@ def test_resolve_job_target_department_only_and_pronoun(db):
     assert resolve_job_target(db, "RAG 原理的判定口径是什么？")["status"] == "none"
 
 
+def test_resolve_job_target_standard_question_does_not_ask_for_job(db):
+    """问某项能力的判定标准不应追问岗位；真正的岗位追问仍然保留。"""
+    _seed_jobs(db)
+    assert resolve_job_target(db, "RAG 判定标准是什么？")["status"] == "none"
+    assert resolve_job_target(db, "岗位要求 RAG 的判定标准是什么？")["status"] == "none"
+    target = resolve_job_target(db, "这个岗位要求项有哪些？")
+    assert target["status"] == "ambiguous"
+    assert target["candidates"]
+
+
 def test_resolve_job_target_duplicate_name_is_ambiguous(db):
     _seed_jobs(db)
     data = db.query(Department).filter(Department.name == "数据部").one()
@@ -445,6 +455,42 @@ def test_answer_question_job_hint_walks_job_clarify(db, monkeypatch):
     assert "可选岗位：技术部 / 大模型应用工程师" in result["answer"]["answer"]
     assert result["pending_intent"]["type"] == "job_clarify"
     assert result["pending_intent"]["candidates"][0]["job_name"] == "大模型应用工程师"
+
+
+def test_answer_question_standard_hint_routes_to_generic_kb(db, monkeypatch):
+    """分类器误判 ambiguous 时，标准类问题强制走 job_ability 通用检索，不追问岗位。"""
+    monkeypatch.setattr(qa_service, "classify_question", lambda *a, **k: AMBIGUOUS)
+    captured = {}
+
+    def fake_retrieve(session, query, domain=None):
+        captured["domain"] = domain
+        return [
+            {
+                "segment_id": "DOC-001-S001",
+                "document_id": "DOC-001",
+                "document_name": "岗位能力标准",
+                "domain": "job_ability",
+                "section": "二、通用素质标准 / RAG",
+                "content": "RAG 原理的判定标准是掌握检索增强生成的完整链路。",
+                "type": "text",
+                "score": 0.9,
+            }
+        ]
+
+    monkeypatch.setattr(qa_service, "retrieve_doc_segments", fake_retrieve)
+    fake = SimpleNamespace(
+        chat_model=SimpleNamespace(
+            invoke=lambda messages: SimpleNamespace(
+                content=_payload("RAG 原理的判定标准是掌握检索增强生成的完整链路（S1）。")
+            )
+        )
+    )
+    monkeypatch.setattr(qa_service, "get_model_client", lambda: fake)
+    result = qa_service.answer_question(db, "RAG 判定标准是什么？")
+    assert result["category"] == JOB_ABILITY
+    assert captured["domain"] == JOB_ABILITY
+    assert result["hit"] is True
+    assert result["answer"]["citations"][0]["document_id"] == "DOC-001"
 
 
 def test_answer_question_empty_evidence_returns_fallback(db, monkeypatch):
@@ -535,3 +581,78 @@ def test_qa_ask_api_creates_async_task(client, monkeypatch):
 def test_qa_ask_api_rejects_empty_question(client):
     response = client.post("/qa/ask", json={"question": ""})
     assert response.status_code == 422
+
+
+# ---------- 历史摘要压缩 ----------
+
+def _make_turns(n: int) -> list[dict]:
+    return [{"question": f"问题{i}", "answer": f"回答{i}"} for i in range(1, n + 1)]
+
+
+def test_history_context_keeps_recent_turns_verbatim_when_within_window():
+    # 4 轮以内全部原文注入，不触发摘要
+    ctx = qa_service._history_context(_make_turns(3))
+    assert "问题1" in ctx and "回答3" in ctx
+    assert "较早对话摘要" not in ctx
+
+
+def test_history_context_summarizes_older_turns(monkeypatch):
+    calls = {"count": 0}
+
+    def _fake_summary(turns):
+        calls["count"] += 1
+        assert len(turns) == 2  # 6 轮 - 保留最近 4 轮 = 2 轮进入摘要
+        return "用户此前在了解技术中心大模型应用工程师的任职要求"
+
+    monkeypatch.setattr(qa_service, "_summarize_history", _fake_summary)
+    ctx = qa_service._history_context(_make_turns(6))
+    assert calls["count"] == 1
+    assert "【较早对话摘要】" in ctx
+    assert "技术中心大模型应用工程师" in ctx
+    assert "问题1" not in ctx  # 最早轮次不再以原文出现
+    assert "问题6" in ctx and "回答6" in ctx  # 最近轮次保留原文
+
+
+def test_history_context_degrades_when_summary_fails(monkeypatch):
+    def _boom(_turns):
+        return None  # 摘要失败：降级为仅保留最近轮次
+
+    monkeypatch.setattr(qa_service, "_summarize_history", _boom)
+    ctx = qa_service._history_context(_make_turns(6))
+    assert "较早对话摘要" not in ctx
+    assert "问题1" not in ctx
+    assert "问题6" in ctx
+
+
+def test_history_context_truncates_to_max_turns(monkeypatch):
+    captured = {}
+
+    def _fake_summary(turns):
+        captured["older"] = turns
+        return "摘要"
+
+    monkeypatch.setattr(qa_service, "_summarize_history", _fake_summary)
+    ctx = qa_service._history_context(_make_turns(12))
+    # 仅取最后 QA_MAX_HISTORY_TURNS 轮：摘要覆盖 8-4=4 轮，最早 4 轮直接丢弃
+    assert len(captured["older"]) == settings.QA_MAX_HISTORY_TURNS - settings.QA_HISTORY_RECENT_TURNS
+    assert "问题4" not in ctx  # 最后 8 轮为 5~12，第 4 轮及更早直接丢弃
+    assert "问题5" in captured["older"][0]["question"]
+    assert "问题12" in ctx
+
+
+def test_summarize_history_success_and_failure(monkeypatch):
+    class _Chat:
+        def invoke(self, _messages):
+            return SimpleNamespace(content="  用户已确定岗位是产品经理  ")
+
+    monkeypatch.setattr(
+        qa_service, "ModelClient", lambda **_kw: SimpleNamespace(chat_model=_Chat())
+    )
+    summary = qa_service._summarize_history(_make_turns(2))
+    assert summary == "用户已确定岗位是产品经理"
+
+    def _blocked(**_kw):
+        raise RuntimeError("LLM 不可用")
+
+    monkeypatch.setattr(qa_service, "ModelClient", _blocked)
+    assert qa_service._summarize_history(_make_turns(2)) is None  # 异常降级为 None，不抛出

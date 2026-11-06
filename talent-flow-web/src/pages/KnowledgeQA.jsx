@@ -133,7 +133,7 @@ export default function KnowledgeQA() {
         items[items.length - 1].answer = message.answer?.answer || ''
       }
     }
-    return items.slice(-3)
+    return items.slice(-8) // 与后端 QA_MAX_HISTORY_TURNS 对齐，超出的由后端截断/摘要
   }
 
   const ask = async (text) => {
@@ -316,7 +316,7 @@ export default function KnowledgeQA() {
                 }
               }}
               placeholder="输入招聘制度相关问题，Enter 发送 / Shift+Enter 换行"
-              className="flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2.5 text-sm leading-6 outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 disabled:bg-slate-50 disabled:text-slate-400"
+              className="flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-xs leading-5 outline-none placeholder:text-slate-400 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 disabled:bg-slate-50 disabled:text-slate-400"
             />
             <button
               onClick={() => ask()}

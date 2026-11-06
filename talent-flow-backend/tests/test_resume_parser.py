@@ -74,6 +74,24 @@ def test_validate_aligns_suggestions_with_requirement_names():
     ]
 
 
+def test_validate_converts_unsatisfied_without_reverse_evidence():
+    """判为不满足但没有可引用的反向证据 → 改判证据不足；有明确反向原文才保留不满足。"""
+    result = _result(
+        advantages=[],
+        suggestions=[
+            MatchSuggestion(name="大模型经验", suggestion="不满足", evidence=""),
+            MatchSuggestion(name="K8s", suggestion="不满足", evidence="未接触"),
+            MatchSuggestion(
+                name="Java",
+                suggestion="不满足",
+                evidence="简历仅描述 Python 与 Go 后端开发，无 Java 项目经历",
+            ),
+        ],
+    )
+    data = json.loads(_validate(result, ["大模型经验", "K8s", "Java"]))
+    assert [s["suggestion"] for s in data["suggestions"]] == ["证据不足", "证据不足", "不满足"]
+
+
 def test_parse_resume_with_fake_llm_filters_weak_advantages(monkeypatch, tmp_path):
     """走完整 chain（读取文件 → 假 LLM → parser → validate），验证业务过滤生效。"""
     resume = tmp_path / "resume.txt"

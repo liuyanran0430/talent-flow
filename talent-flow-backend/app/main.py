@@ -1,8 +1,11 @@
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from .core.config import settings
 from .database import init_db
@@ -92,13 +95,39 @@ def _init_doc_bm25() -> None:
         lifecycle_logger.warning("制度 BM25 索引构建失败，关键词支路降级：%s", e)
 
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
 app = FastAPI(
     title=settings.APP_NAME,
     description="TalentFlow 招聘后台 API，与前端 talent-flow 对接。功能模块按 OpenAPI tags 划分。",
     version="0.1.0",
     openapi_tags=TAGS_METADATA,
     lifespan=lifespan,
+    redoc_url=None,  # /redoc 改为本地托管，见下方自定义路由
 )
+
+# ReDoc 静态资源目录（app/static/redoc.standalone.js），不依赖外网 CDN
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/redoc", include_in_schema=False)
+def redoc_docs() -> HTMLResponse:
+    """本地托管的 ReDoc 页面：脚本走 /static，避免 CDN 不可达导致白屏。"""
+    return HTMLResponse(
+        """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TalentFlow Backend - ReDoc</title>
+<style>body { margin: 0; padding: 0; }</style>
+</head>
+<body>
+<redoc spec-url="/openapi.json"></redoc>
+<script src="/static/redoc.standalone.js"></script>
+</body>
+</html>"""
+    )
 
 app.add_middleware(
     CORSMiddleware,
